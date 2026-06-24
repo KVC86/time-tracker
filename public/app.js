@@ -688,8 +688,18 @@ function shiftLengthHours(startTime,endTime){
 async function postWithCompliance(url,body){
   let r=await api(url,{method:"POST",body});
   if(r&&r.needsConfirmation){
-    const more=r.warnings.length>8?`\n…and ${r.warnings.length-8} more`:"";
-    const msg="Compliance issues with this schedule:\n\n"+r.warnings.slice(0,8).map(w=>"• "+w).join("\n")+more;
+    // Leave conflicts (scheduling someone on approved/pending leave) are more
+    // serious than shift-length nits — list them first so they always show
+    // above the cap, and flag them in a header.
+    const all=r.warnings||[];
+    const leave=all.filter(w=>/\bleave\b/i.test(w));
+    const ordered=[...leave,...all.filter(w=>!/\bleave\b/i.test(w))];
+    const cap=8;
+    const more=ordered.length>cap?`\n…and ${ordered.length-cap} more`:"";
+    const header=leave.length
+      ? `⚠ ${leave.length} leave conflict${leave.length>1?"s":""} — the person may be on approved/pending leave.\n\n`
+      : "";
+    const msg=header+"Compliance issues with this schedule:\n\n"+ordered.slice(0,cap).map(w=>"• "+w).join("\n")+more;
     const ok=await confirmDialog({title:"Compliance warnings",message:msg,confirmText:"Apply anyway",cancelText:"Go back",kind:"warn"});
     if(!ok) return null;
     r=await api(url,{method:"POST",body:{...body,force:true}});
