@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: wfm_postgres
+    environment:
+      POSTGRES_USER: wfm
+      POSTGRES_PASSWORD: wfm
+      POSTGRES_DB: wfm
+    ports:
+      - "5432:5432"
+    volumes:
+      - wfm_pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: wfm_redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  wfm_pgdata:
