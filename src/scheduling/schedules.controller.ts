@@ -16,7 +16,7 @@ import { TimeEventsPublisher } from '../time-tracking/time-tracking.gateway';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
-import { Role } from '@prisma/client';
+import { Role, LeaveStatus } from '@prisma/client';
 
 interface AuthedReq {
   user: { userId: string; employeeId: string; roles: Role[] };
@@ -132,6 +132,25 @@ export class SchedulesController {
     });
     const nameById = new Map(emps.map((e) => [e.id, `${e.employeeCode} ${e.fullName}`]));
 
+    // Approved/pending leave overlapping the applied date range, per employee.
+    // (Rejected leave is ignored; pending is surfaced as a softer warning.)
+    const minWork = new Date(Math.min(...times));
+    const maxWork = new Date(Math.max(...times));
+    const leaves = await this.prisma.leaveRequest.findMany({
+      where: {
+        employeeId: { in: empIds },
+        status: { in: [LeaveStatus.APPROVED, LeaveStatus.PENDING] },
+        startDate: { lte: maxWork },
+        endDate: { gte: minWork },
+      },
+      select: { employeeId: true, leaveType: true, status: true, startDate: true, endDate: true },
+    });
+    const leavesByEmp = new Map<string, typeof leaves>();
+    for (const lv of leaves) {
+      if (!leavesByEmp.has(lv.employeeId)) leavesByEmp.set(lv.employeeId, []);
+      leavesByEmp.get(lv.employeeId)!.push(lv);
+    }
+
     const key = (d: Date) => d.toISOString().slice(0, 10);
     const byEmp = new Map<string, Map<string, any>>();
     const put = (r: any) => {
@@ -205,6 +224,25 @@ export class SchedulesController {
         warnings.push(`${name}: ${underN} shift${underN > 1 ? 's' : ''} under the standard ${policy.shiftHours}h (e.g. ${underEx}).`);
       if (overN)
         warnings.push(`${name}: ${overN} shift${overN > 1 ? 's' : ''} over ${policy.shiftHours}h (e.g. ${overEx}) — consider the overtime window instead.`);
+
+      // f) leave conflicts — a working day being applied that lands inside one
+      //    of the employee's leave spans. Approved leave is a hard conflict;
+      //    pending leave is a softer heads-up (it may yet be rejected).
+      const myLeaves = leavesByEmp.get(eid) ?? [];
+      if (myLeaves.length) {
+        const myWorkDays = newRows.filter((r) => r.employeeId === eid && isWork(r));
+        for (const lv of myLeaves) {
+          const lo = lv.startDate.getTime(), hi = lv.endDate.getTime();
+          const n = myWorkDays.filter((r) => r.workDate.getTime() >= lo && r.workDate.getTime() <= hi).length;
+          if (!n) continue;
+          const span = lo === hi ? key(lv.startDate) : `${key(lv.startDate)}–${key(lv.endDate)}`;
+          const days = `workday${n > 1 ? 's' : ''}`;
+          if (lv.status === LeaveStatus.APPROVED)
+            warnings.push(`${name}: ${n} scheduled ${days} overlap APPROVED ${lv.leaveType} leave (${span}).`);
+          else
+            warnings.push(`${name}: ${n} scheduled ${days} overlap a PENDING ${lv.leaveType} leave request (${span}) — not yet approved.`);
+        }
+      }
     }
 
     return warnings;

@@ -18,6 +18,9 @@ export async function cleanupOrg(prisma: PrismaClient, orgId: string) {
   await prisma.breakApproval.deleteMany({
     where: { OR: [{ employeeId: { in: empIds } }, { grantedById: { in: empIds } }] },
   });
+  await prisma.leaveRequest.deleteMany({
+    where: { OR: [{ employeeId: { in: empIds } }, { reviewedById: { in: empIds } }] },
+  });
   await prisma.employee.deleteMany({ where: { orgId } });
   await prisma.shiftPolicy.deleteMany({ where: { orgId } });
   await prisma.activityType.deleteMany({ where: { orgId } });
