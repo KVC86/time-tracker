@@ -1,0 +1,559 @@
+// =====================================================================
+//  Enterprise Workforce Management — Time Tracker Module
+//  Prisma schema. Target: PostgreSQL 17/18 behind PgBouncer.
+//
+//  NOTE ON SCALE (see README-architecture.md §3):
+//   - A partial UNIQUE index ("one OPEN shift per employee") and monthly
+//     RANGE partitioning of the high-growth tables are applied via raw
+//     SQL migrations, because Prisma's schema DSL can't express either.
+//     The accompanying SQL is at the bottom of this file as a comment.
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")        // points at PgBouncer in production
+  directUrl = env("DIRECT_DATABASE_URL") // direct connection for migrations
+}
+
+// ─────────────────────────── ENUMS ──────────────────────────────────
+
+enum Role {
+  EMPLOYEE
+  TEAM_LEAD
+  WFM         // Workforce Management — scheduling authority, one level above TEAM_LEAD
+  MANAGER
+  HR
+  PAYROLL
+  ADMIN
+}
+
+enum EmploymentType {
+  REGULAR
+  PROBATIONARY
+  AGENCY
+  PART_TIME
+}
+
+enum TimeEntryStatus {
+  OPEN         // shift window running (employee may be active OR logged-out-in-background)
+  CLOSED       // explicit clock-out
+  AUTO_CLOSED  // closed by the 8h expiry job or a break-overrun auto-logout
+}
+
+enum BreakType {
+  REGULAR      // 30 min, 1 per shift, unlocks after 4h
+  BIO          // 5 min, max 3 per shift
+  ADDITIONAL   // 10 min, requires Team Lead approval
+}
+
+enum ApprovalStatus {
+  GRANTED
+  CONSUMED
+  REVOKED
+}
+
+enum ViolationType {
+  EARLY_REGULAR_BREAK
+  SECOND_REGULAR_BREAK
+  BIO_LIMIT_EXCEEDED
+  ADDL_UNAPPROVED
+  BREAK_OVERRUN
+  SHIFT_EXPIRED
+  OUT_OF_SCHEDULE_LOGIN
+}
+
+enum LeaveType {
+  VACATION
+  SICK
+  EMERGENCY
+  UNPAID
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// A reusable payroll line: a deduction (SSS, PhilHealth…) or an allowance.
+enum PayComponentKind {
+  ALLOWANCE
+  DEDUCTION
+}
+
+// How a component's amount is derived when a payslip is generated.
+enum PayComponentMethod {
+  FIXED              // a flat peso amount
+  PERCENT_OF_GROSS   // percent of gross pay
+  BRACKET            // table lookup on gross (e.g. SSS/PhilHealth contribution brackets)
+}
+
+// Who a component applies to. ORG = everyone (statutory deductions);
+// TEAM = an account/team's members; EMPLOYEE = a single person.
+enum PayComponentScope {
+  ORG
+  TEAM
+  EMPLOYEE
+}
+
+enum PayslipStatus {
+  DRAFT      // payroll is still editing; not visible to the employee
+  RELEASED   // finalized and visible to the employee
+}
+
+enum PayslipLineCategory {
+  EARNING    // regular / overtime / night-differential pay
+  ALLOWANCE
+  DEDUCTION
+}
+
+// ───────────────────── ORG / PEOPLE / IDENTITY ──────────────────────
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  timezone    String   @default("Asia/Manila")
+  createdAt   DateTime @default(now())
+
+  departments    Department[]
+  employees      Employee[]
+  policies       ShiftPolicy[]
+  activityTypes  ActivityType[]
+  payComponents  PayComponent[]
+
+  @@map("organizations")
+}
+
+model Department {
+  id        String   @id @default(cuid())
+  orgId     String
+  name      String
+  org       Organization @relation(fields: [orgId], references: [id])
+  teams     Team[]
+
+  @@index([orgId])
+  @@map("departments")
+}
+
+model Team {
+  id           String   @id @default(cuid())
+  departmentId String
+  name         String
+  policyId     String?  // team may override the org default shift policy
+  leadId       String?  // designated team lead (Employee with TEAM_LEAD role)
+  managerId    String?  // overseeing manager (Employee with MANAGER role)
+  photoUrl     String?  // team group photo (base64 data URL)
+
+  department   Department   @relation(fields: [departmentId], references: [id])
+  policy       ShiftPolicy? @relation(fields: [policyId], references: [id])
+  lead         Employee?    @relation("TeamLead", fields: [leadId], references: [id])
+  manager      Employee?    @relation("TeamManager", fields: [managerId], references: [id])
+  employees    Employee[]   @relation("TeamMembers")
+  activityAssignments ActivityAssignment[]
+  payComponents PayComponent[]
+
+  @@index([departmentId])
+  @@map("teams")
+}
+
+model Employee {
+  id             String         @id @default(cuid())
+  orgId          String
+  teamId         String?
+  employeeCode   String                                   // e.g. EMP-12
+  fullName       String
+  employmentType EmploymentType @default(REGULAR)
+  hireDate       DateTime
+  active         Boolean        @default(true)
+  photoUrl       String?                                  // profile photo (base64 data URL)
+  hourlyRate     Float?                                   // pay rate per hour (set by payroll)
+
+  org            Organization @relation(fields: [orgId], references: [id])
+  team           Team?        @relation("TeamMembers", fields: [teamId], references: [id])
+  user           User?
+  ledTeams       Team[]       @relation("TeamLead")
+  managedTeams   Team[]       @relation("TeamManager")
+
+  schedules        Schedule[]
+  timeEntries      TimeEntry[]
+  violations       ComplianceViolation[]
+  approvalsTo      BreakApproval[] @relation("ApprovalEmployee")
+  approvalsByTL    BreakApproval[] @relation("ApprovalGrantedBy")
+  leaveRequests    LeaveRequest[]  @relation("LeaveEmployee")
+  leaveReviews     LeaveRequest[]  @relation("LeaveReviewer")
+  activityAssignments ActivityAssignment[]
+  payslips         Payslip[]
+  payComponents    PayComponent[]
+
+  @@unique([orgId, employeeCode])
+  @@index([teamId])
+  @@map("employees")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  employeeId    String?  @unique     // HR/payroll users may have no employee record
+  email         String   @unique
+  passwordHash  String
+  roles         Role[]   @default([EMPLOYEE])
+  mfaSecret     String?               // TOTP secret (staff). Null until enrolled.
+  mfaEnrolledAt DateTime?             // set once the first valid TOTP confirms enrollment
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  employee      Employee?      @relation(fields: [employeeId], references: [id])
+  refreshTokens RefreshToken[]
+  emailOtps     EmailOtp[]
+
+  @@map("users")
+}
+
+// Rotating refresh tokens. The raw token is "<id>.<secret>"; we store only
+// a hash of the secret, so a DB leak can't be replayed.
+model RefreshToken {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user       User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// Short-lived one-time codes for email-OTP MFA (floor agents).
+model EmailOtp {
+  id         String    @id @default(cuid())
+  userId     String
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  user       User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("email_otps")
+}
+
+// ───────────────────── POLICY (your CFG, as data) ───────────────────
+
+model ShiftPolicy {
+  id                 String @id @default(cuid())
+  orgId              String
+  name               String @default("Default")
+
+  shiftHours         Int    @default(8)
+  regUnlockHours     Int    @default(4)   // regular break unlocks after N hours
+  regMaxSeconds      Int    @default(1800) // 30 min
+  regPerShift        Int    @default(1)
+  bioMaxSeconds      Int    @default(300)  // 5 min
+  bioPerShift        Int    @default(3)
+  addlMaxSeconds     Int    @default(600)  // 10 min
+  graceSeconds       Int    @default(0)    // optional leniency before auto-logout
+
+  // Scheduling compliance guardrails — warn the WFM at schedule-apply time.
+  minRestHours           Int @default(11)  // min rest between consecutive shifts
+  maxConsecutiveDays     Int @default(6)   // max working days in a row
+  maxWeeklyHours         Int @default(48)  // hard cap on scheduled hours / 7-day window
+  otWeeklyThresholdHours Int @default(40)  // hours over which a week is flagged as overtime
+
+  // Payroll rules
+  otMultiplier           Float @default(1.5)  // overtime pay multiplier (hours/day over shiftHours)
+  nightDiffPercent       Int   @default(10)   // % premium on hours worked at night (22:00-06:00)
+
+  createdAt          DateTime @default(now())
+
+  org                Organization @relation(fields: [orgId], references: [id])
+  teams              Team[]
+
+  @@index([orgId])
+  @@map("shift_policies")
+}
+
+model Schedule {
+  id             String    @id @default(cuid())
+  employeeId     String
+  workDate       DateTime  @db.Date
+  scheduledStart DateTime?                  // null on a rest day
+  scheduledEnd   DateTime?                  // null on a rest day
+  otStart        DateTime?                  // optional overtime window (individual only)
+  otEnd          DateTime?
+  isRestDay      Boolean   @default(false)  // explicit day-off designation
+  isNightShift   Boolean   @default(false)  // drives night-differential later
+  otAcknowledgedAt DateTime?                // employee dismissed the "you've been given OT" banner
+
+  employee       Employee  @relation(fields: [employeeId], references: [id])
+
+  // The day-level row is the anchor. Split shifts / overtime can later attach
+  // as a child ScheduleSegment table without reworking this model.
+  @@unique([employeeId, workDate])
+  @@index([workDate])
+  @@map("schedules")
+}
+
+// ───────────────────── TIME & ATTENDANCE CORE ───────────────────────
+
+model TimeEntry {
+  id          String          @id @default(cuid())
+  employeeId  String
+  scheduleId  String?
+  clockInAt   DateTime        @default(now())   // SERVER time
+  clockOutAt  DateTime?
+  shiftEndsAt DateTime                          // clockInAt + policy.shiftHours (the hard 8h window)
+  status      TimeEntryStatus @default(OPEN)
+  source      String          @default("web")   // web | kiosk | mobile
+  ipAddress   String?
+
+  employee    Employee          @relation(fields: [employeeId], references: [id])
+  activities  ActivitySession[]
+  breaks      BreakEntry[]
+
+  // A partial unique index (status = 'OPEN') is added via raw SQL migration
+  // to guarantee one open shift per employee. See SQL block below.
+  @@index([employeeId, status])
+  @@index([shiftEndsAt])
+  @@map("time_entries")
+}
+
+model ActivitySession {
+  id           String    @id @default(cuid())
+  timeEntryId  String
+  activityType String                        // Productivity | Inbound Calls | ... (configurable per org)
+  startedAt    DateTime  @default(now())
+  endedAt      DateTime?
+
+  timeEntry    TimeEntry @relation(fields: [timeEntryId], references: [id])
+
+  @@index([timeEntryId])
+  @@map("activity_sessions")
+}
+
+model BreakEntry {
+  id           String    @id @default(cuid())
+  timeEntryId  String
+  breakType    BreakType
+  startedAt    DateTime  @default(now())
+  deadlineAt   DateTime                       // startedAt + policy max — drives the enforcement scheduler
+  endedAt      DateTime?
+  exceeded     Boolean   @default(false)
+  approvalId   String?                        // set for ADDITIONAL breaks
+
+  timeEntry    TimeEntry      @relation(fields: [timeEntryId], references: [id])
+  approval     BreakApproval? @relation(fields: [approvalId], references: [id])
+
+  // Indexed for the reconciliation sweep: open breaks past their deadline.
+  @@index([deadlineAt])
+  @@index([timeEntryId])
+  @@map("break_entries")
+}
+
+model BreakApproval {
+  id          String         @id @default(cuid())
+  employeeId  String
+  grantedById String
+  status      ApprovalStatus @default(GRANTED)
+  grantedAt   DateTime       @default(now())
+  consumedAt  DateTime?
+  revokedAt   DateTime?
+
+  employee    Employee  @relation("ApprovalEmployee", fields: [employeeId], references: [id])
+  grantedBy   Employee  @relation("ApprovalGrantedBy", fields: [grantedById], references: [id])
+  breaks      BreakEntry[]
+
+  @@index([employeeId, status])
+  @@map("break_approvals")
+}
+
+model ComplianceViolation {
+  id          String        @id @default(cuid())
+  employeeId  String
+  type        ViolationType
+  detail      String
+  occurredAt  DateTime      @default(now())
+
+  employee    Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId, occurredAt])
+  @@map("compliance_violations")
+}
+
+// Org-scoped list of activity types that agents can log time against.
+// Team Leads manage this list; employees can only pick from it.
+model ActivityType {
+  id        String   @id @default(cuid())
+  orgId     String
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  org         Organization @relation(fields: [orgId], references: [id])
+  assignments ActivityAssignment[]
+
+  @@unique([orgId, name])
+  @@index([orgId])
+  @@map("activity_types")
+}
+
+// Assigns an activity type to a target: exactly one of employeeId / teamId.
+// An employee's available activities = those assigned to them directly
+// PLUS those assigned to their team.
+model ActivityAssignment {
+  id             String   @id @default(cuid())
+  activityTypeId String
+  employeeId     String?  // set when assigned to an individual
+  teamId         String?  // set when assigned to a whole team
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  activityType   ActivityType @relation(fields: [activityTypeId], references: [id])
+  employee       Employee?    @relation(fields: [employeeId], references: [id])
+  team           Team?        @relation(fields: [teamId], references: [id])
+
+  @@index([employeeId])
+  @@index([teamId])
+  @@index([activityTypeId])
+  @@map("activity_assignments")
+}
+
+model LeaveRequest {
+  id           String      @id @default(cuid())
+  employeeId   String
+  reviewedById String?
+  leaveType    LeaveType
+  startDate    DateTime    @db.Date
+  endDate      DateTime    @db.Date
+  reason       String?
+  status       LeaveStatus @default(PENDING)
+  reviewNote   String?
+  submittedAt  DateTime    @default(now())
+  reviewedAt   DateTime?
+
+  employee     Employee  @relation("LeaveEmployee",  fields: [employeeId],   references: [id])
+  reviewedBy   Employee? @relation("LeaveReviewer",  fields: [reviewedById], references: [id])
+
+  @@index([employeeId, status])
+  @@index([startDate])
+  @@map("leave_requests")
+}
+
+// ───────────────────────── PAYROLL ─────────────────────────────────
+// A reusable deduction/allowance definition the Payroll specialist manages.
+// Applied to matching employees when their payslip is generated; the
+// resulting amount is then editable per payslip (see PayslipLine.origin).
+model PayComponent {
+  id         String             @id @default(cuid())
+  orgId      String
+  kind       PayComponentKind
+  name       String                                // e.g. "SSS", "PhilHealth", "Transport allowance"
+  method     PayComponentMethod @default(FIXED)
+  amount     Float?                                 // FIXED → peso amount
+  percent    Float?                                 // PERCENT_OF_GROSS → percent (e.g. 4.5)
+  brackets   Json?                                  // BRACKET → [{ upTo: number|null, amount?: number, percent?: number }]
+  scope      PayComponentScope  @default(ORG)
+  teamId     String?                                // set when scope = TEAM (the "account")
+  employeeId String?                                // set when scope = EMPLOYEE
+  active     Boolean            @default(true)
+  createdAt  DateTime           @default(now())
+
+  org        Organization @relation(fields: [orgId], references: [id])
+  team       Team?        @relation(fields: [teamId], references: [id])
+  employee   Employee?    @relation(fields: [employeeId], references: [id])
+  lines      PayslipLine[]
+
+  @@index([orgId, kind])
+  @@index([teamId])
+  @@index([employeeId])
+  @@map("pay_components")
+}
+
+// A generated payslip for one employee over one pay period. DRAFT while
+// Payroll edits it; RELEASED makes it visible to the employee.
+model Payslip {
+  id            String        @id @default(cuid())
+  employeeId    String
+  periodStart   DateTime      @db.Date
+  periodEnd     DateTime      @db.Date
+  regularHours  Float         @default(0)
+  overtimeHours Float         @default(0)
+  nightHours    Float         @default(0)
+  grossPay      Float         @default(0)
+  totalAllowances Float       @default(0)
+  totalDeductions Float       @default(0)
+  netPay        Float         @default(0)
+  status        PayslipStatus @default(DRAFT)
+  generatedById String?                            // Employee id of the payroll specialist
+  releasedAt    DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  employee      Employee      @relation(fields: [employeeId], references: [id])
+  lines         PayslipLine[]
+
+  @@unique([employeeId, periodStart, periodEnd])
+  @@index([employeeId, status])
+  @@map("payslips")
+}
+
+// One line on a payslip. EARNING lines come from worked hours; ALLOWANCE/
+// DEDUCTION lines come from PayComponents. origin = MANUAL once edited/added by hand.
+model PayslipLine {
+  id          String              @id @default(cuid())
+  payslipId   String
+  category    PayslipLineCategory
+  label       String
+  amount      Float
+  origin      String              @default("AUTO")  // AUTO | MANUAL
+  componentId String?                                // source PayComponent, when origin = AUTO
+
+  payslip     Payslip       @relation(fields: [payslipId], references: [id], onDelete: Cascade)
+  component   PayComponent? @relation(fields: [componentId], references: [id])
+
+  @@index([payslipId])
+  @@map("payslip_lines")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  action      String                    // e.g. APPROVAL_GRANTED, BREAK_AUTO_LOGOUT
+  entity      String
+  entityId    String
+  payload     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_log")
+}
+
+// =====================================================================
+//  RAW SQL MIGRATIONS (run after `prisma migrate`, e.g. in a follow-up
+//  migration file). These express what the DSL above cannot.
+// =====================================================================
+//
+//  -- 1) One OPEN shift per employee (idempotent clock-in safety):
+//  --    (Prisma maps fields to camelCase columns, so they are quoted.)
+//  CREATE UNIQUE INDEX time_entries_one_open_per_employee
+//    ON time_entries ("employeeId")
+//    WHERE status = 'OPEN';
+//
+//  -- 2) Fast reconciliation sweep (open, overdue breaks):
+//  CREATE INDEX break_entries_open_overdue
+//    ON break_entries ("deadlineAt")
+//    WHERE "endedAt" IS NULL;
+//
+//  -- 3) Monthly range partitioning (illustrative; do for time_entries,
+//  --    activity_sessions, break_entries, audit_log). Convert the table
+//  --    to PARTITION BY RANGE (created/clock_in column) and pre-create
+//  --    monthly partitions via pg_partman or a scheduled job. Keeps hot
+//  --    partitions small and lets you drop/archive old months cheaply.
+// =====================================================================

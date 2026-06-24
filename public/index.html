@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Shift Console</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="brand"><span class="dot" id="liveDot"></span> Shift Console</div>
+  <div class="who" id="who"></div>
+</div>
+
+<div class="wrap">
+
+  <!-- ───────────── LOGIN ───────────── -->
+  <div id="view-login" class="panel" style="max-width:420px;margin:60px auto">
+    <h2>Sign in</h2>
+    <div class="sub">Use your email or employee code.</div>
+    <label class="fld"><span>Email or employee code</span>
+      <input id="li-id" placeholder="EMP-12  or  you@company.com" autocomplete="username"/></label>
+    <label class="fld"><span>Password</span>
+      <input id="li-pw" type="password" placeholder="••••••••" autocomplete="current-password"/></label>
+    <button class="btn primary" style="width:100%;margin-top:8px" id="li-go">Continue</button>
+    <div id="li-err" class="muted" style="color:var(--red);margin-top:12px;font-size:13px"></div>
+  </div>
+
+  <!-- ───────────── MFA ───────────── -->
+  <div id="view-mfa" class="panel hide" style="max-width:480px;margin:60px auto">
+    <h2 id="mfa-title">Verify it's you</h2>
+    <div class="sub" id="mfa-sub"></div>
+    <div id="mfa-enroll" class="qr hide" style="margin-bottom:16px">
+      <div id="mfa-qr"></div>
+      <div style="flex:1;min-width:200px">
+        <div class="muted" style="font-size:13px;margin-bottom:8px">Scan with an authenticator app, then enter the 6-digit code it shows.</div>
+        <div class="muted" style="font-size:12px">Manual key:</div>
+        <code class="inline" id="mfa-secret"></code>
+        <div><button class="btn ghost" id="copyKey" style="padding:4px 10px;font-size:12px;margin-top:8px">Copy key</button></div>
+      </div>
+    </div>
+    <label class="fld"><span>6-digit code</span>
+      <input id="mfa-code" inputmode="numeric" maxlength="6" placeholder="000000" style="font-family:var(--mono);font-size:20px;letter-spacing:6px;text-align:center"/></label>
+    <button class="btn primary" style="width:100%" id="mfa-go">Verify</button>
+    <div id="mfa-err" class="muted" style="color:var(--red);margin-top:12px;font-size:13px"></div>
+    <div class="muted" style="margin-top:14px;font-size:12px">Dev note: emailed codes print in the server terminal running <code class="inline">npm run start:dev</code>.</div>
+  </div>
+
+  <!-- ───────────── APP ───────────── -->
+  <div id="view-app" class="hide">
+    <div class="tabs" id="tabs"></div>
+
+    <!-- Employee clock -->
+    <div id="tab-clock">
+      <div id="otBanner" class="hide"></div>
+      <div class="panel">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div><h2 style="margin:0">My shift</h2><div class="clock-now" id="now"></div></div>
+          <span class="status-pill off" id="statusPill">Clocked out</span>
+        </div>
+
+        <div id="offShift">
+          <div class="sub" style="margin-top:14px">Pick what you're starting on, then clock in.</div>
+          <div class="chips" id="activityPickOff"></div>
+          <button class="btn primary" id="clockInBtn" style="margin-top:16px">Clock in</button>
+        </div>
+
+        <div id="onShift" class="hide">
+          <div class="hero">
+            <div class="big timer" id="shiftTimer">0:00:00</div>
+            <div class="lbl">left in shift</div>
+          </div>
+          <div class="bar"><i id="shiftBar"></i></div>
+
+          <div id="breakBox" class="hide" style="margin-top:18px;padding:16px;border:1px solid #3a3014;border-radius:12px;background:#16130a">
+            <div class="row" style="justify-content:space-between;align-items:center">
+              <div><b id="breakLabel">On break</b><div class="muted" style="font-size:13px">Auto-logout if you exceed the limit.</div></div>
+              <div class="big timer" id="breakTimer" style="font-size:30px;color:var(--amber)">0:00</div>
+            </div>
+            <button class="btn warn" id="resumeBtn" style="margin-top:12px">Resume work</button>
+          </div>
+
+          <div id="workBox" style="margin-top:18px">
+            <div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px">Current activity</div>
+            <div class="chips" id="activityPickOn"></div>
+            <div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-top:18px">Breaks</div>
+            <div class="chips" id="breakBtns"></div>
+            <div class="row" style="margin-top:22px">
+              <button class="btn danger" id="clockOutBtn">Clock out</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Employee leave -->
+    <div id="tab-leave" class="hide">
+      <div class="grid2">
+        <div class="panel">
+          <h2>Request leave</h2>
+          <div class="sub">Submit a leave request for your team lead to review. Leave must be requested at least 3 days in advance.</div>
+          <label class="fld"><span>Leave type</span>
+            <select id="lv-type">
+              <option value="VACATION">Vacation</option>
+              <option value="SICK">Sick</option>
+              <option value="EMERGENCY">Emergency</option>
+              <option value="UNPAID">Unpaid</option>
+            </select></label>
+          <label class="fld"><span>Start date</span><input id="lv-start" type="date"/></label>
+          <label class="fld"><span>End date</span><input id="lv-end" type="date"/></label>
+          <label class="fld"><span>Reason <span class="muted">(optional)</span></span>
+            <input id="lv-reason" placeholder="Brief description…" maxlength="200"/></label>
+          <button class="btn primary" id="lv-submit" style="width:100%;margin-top:4px">Submit request</button>
+        </div>
+        <div class="panel">
+          <h2>My requests</h2>
+          <div class="sub">History of all your leave requests.</div>
+          <div id="lv-list" class="feed"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WFM scheduling -->
+    <div id="tab-schedule" class="hide">
+      <div class="panel">
+        <h2>Build schedule</h2>
+        <div class="sub">Apply a shift block to a team or an individual across a date range, with optional rest days.</div>
+
+        <div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">1 · Who is this for?</div>
+        <div class="row" style="gap:8px;margin-bottom:12px">
+          <button type="button" class="chip on" id="sc-scope-emp" style="flex:1;justify-content:center;padding:10px">Individual</button>
+          <button type="button" class="chip" id="sc-scope-multi" style="flex:1;justify-content:center;padding:10px">A few people</button>
+          <button type="button" class="chip" id="sc-scope-team" style="flex:1;justify-content:center;padding:10px">Whole team</button>
+        </div>
+        <select id="sc-target" style="margin-bottom:20px"></select>
+        <div id="sc-multi-wrap" class="hide" style="margin-bottom:20px">
+          <div class="muted" style="font-size:12px;margin-bottom:6px">Pick the people who share this shift</div>
+          <div id="sc-multi" class="chips"></div>
+        </div>
+
+        <div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">2 · Which dates?</div>
+        <div class="row" style="gap:10px;margin-bottom:20px">
+          <label class="fld" style="margin:0;flex:1;min-width:130px"><span>Start date</span><input id="sc-start-date" type="date"/></label>
+          <label class="fld" style="margin:0;flex:1;min-width:130px"><span>End date</span><input id="sc-end-date" type="date"/></label>
+        </div>
+
+        <div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">3 · Shift hours</div>
+        <div class="row" style="gap:10px">
+          <label class="fld" style="margin:0;flex:1;min-width:120px"><span>Start time</span><input id="sc-start-time" type="time"/></label>
+          <label class="fld" style="margin:0;flex:1;min-width:120px"><span>End time</span><input id="sc-end-time" type="time"/></label>
+        </div>
+        <label class="fld" style="display:flex;align-items:center;gap:8px;margin-top:10px">
+          <input id="sc-night" type="checkbox" style="width:auto"/>
+          <span style="margin:0;text-transform:none;letter-spacing:0">Night shift (crosses midnight)</span>
+        </label>
+
+        <div id="sc-restwrap" class="hide">
+          <div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin:20px 0 8px">4 · Rest days</div>
+          <div class="muted" style="font-size:12px;margin-bottom:6px">Quick pattern — pick which weekdays are rest days (applied across the whole range)</div>
+          <div id="sc-weekdays" class="chips" style="margin-bottom:14px"></div>
+          <div class="muted" style="font-size:12px;margin-bottom:6px">Fine-tune individual dates</div>
+          <div id="sc-restdays" class="chips"></div>
+        </div>
+
+        <div id="sc-ot-section" style="margin-top:20px;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel-2)">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;cursor:pointer">
+            <input id="sc-ot-on" type="checkbox" style="width:auto"/>
+            Add overtime window <span class="muted" style="font-weight:400;font-size:12px">— individual only, applies to working days</span>
+          </label>
+          <div id="sc-ot-fields" class="row hide" style="gap:10px;margin-top:12px">
+            <label class="fld" style="margin:0;flex:1;min-width:120px"><span>OT start</span><input id="sc-ot-start" type="time"/></label>
+            <label class="fld" style="margin:0;flex:1;min-width:120px"><span>OT end</span><input id="sc-ot-end" type="time"/></label>
+          </div>
+        </div>
+
+        <button class="btn primary" id="sc-apply" style="width:100%;margin-top:20px">Apply schedule</button>
+      </div>
+
+      <div class="panel">
+        <h2>Copy a week</h2>
+        <div class="sub">Duplicate a week's schedule — shifts, rest days, and overtime — to another week.</div>
+        <div class="row" style="gap:10px">
+          <label class="fld" style="margin:0;flex:1;min-width:130px"><span>From week starting</span><input id="cw-from" type="date"/></label>
+          <label class="fld" style="margin:0;flex:1;min-width:130px"><span>To week starting</span><input id="cw-to" type="date"/></label>
+        </div>
+        <label class="fld"><span>Who</span><select id="cw-target"></select></label>
+        <button class="btn primary" id="cw-copy" style="width:100%">Copy week →</button>
+      </div>
+
+      <div class="panel">
+        <h2>Schedules</h2>
+        <div class="sub">Filter by date to see who's scheduled — working days, rest days, and overtime.</div>
+        <label class="fld"><span>Date</span><input id="sc-filter-date" type="date"/></label>
+        <div id="sc-list" class="feed"></div>
+      </div>
+    </div>
+
+    <!-- Team-lead console -->
+    <div id="tab-console" class="hide">
+      <div class="grid2">
+        <div class="panel" id="cn-grant">
+          <h2>Grant an additional bio break</h2>
+          <div class="sub">Pick an agent on your team and approve one extra bio break.</div>
+          <label class="fld"><span>Agent</span><select id="rosterSel"></select></label>
+          <button class="btn primary" id="grantBtn" style="width:100%">Grant additional bio break</button>
+          <div style="margin-top:20px"><div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px">Active grants</div>
+            <div id="activeList" class="feed"></div></div>
+        </div>
+        <div class="panel" id="cn-live">
+          <h2>Live activity</h2>
+          <div class="sub">Approvals, violations, and auto-logouts on your team.</div>
+          <div id="feed" class="feed"></div>
+        </div>
+      </div>
+      <div class="panel" id="cn-violations">
+        <h2>Live violations</h2>
+        <div class="sub">Compliance violations across the organization, in real time.</div>
+        <div id="cv-list" class="feed"></div>
+      </div>
+      <div class="panel" id="cn-leave">
+        <h2>Leave requests</h2>
+        <div class="sub">Pending leave requests from your team.</div>
+        <div id="leaveList" class="feed"></div>
+      </div>
+
+      <div class="panel" id="cn-activitytypes">
+        <h2>Activity types</h2>
+        <div class="sub">Add or remove the activities agents can log time against. Changes take effect immediately.</div>
+        <div style="display:flex;gap:8px;margin-bottom:16px">
+          <input id="newActivityName" placeholder="e.g. Chat Support" style="flex:1;width:auto" maxlength="60"/>
+          <button class="btn primary" id="addActivityBtn" style="width:auto;white-space:nowrap;padding:10px 20px">Add</button>
+        </div>
+        <div id="activityTypeList" class="chips"></div>
+      </div>
+
+      <div class="panel" id="cn-assign">
+        <h2>Assign activities</h2>
+        <div class="sub">Choose a target, then assign which activities they can log time against. Employees only see activities assigned to them or their team.</div>
+        <div class="row" style="gap:10px;margin-bottom:14px">
+          <label class="fld" style="margin:0;flex:1;min-width:160px"><span>Assign to</span>
+            <select id="asgKind">
+              <option value="employee">Individual employee</option>
+              <option value="team">Whole team</option>
+              <option value="all">Everyone (all members)</option>
+            </select></label>
+          <label class="fld" style="margin:0;flex:2;min-width:200px"><span>Target</span>
+            <select id="asgTarget"></select></label>
+        </div>
+        <div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Available in catalog — click to assign</div>
+        <div id="asgCatalog" class="chips" style="margin-bottom:16px"></div>
+        <div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Currently assigned</div>
+        <div id="asgAssigned" class="chips"></div>
+      </div>
+    </div>
+
+    <!-- Manager oversight -->
+    <div id="tab-oversight" class="hide">
+      <div class="panel">
+        <h2>Team oversight</h2>
+        <div class="sub">Live status of floor agents and team leads. <span id="ov-updated" class="muted"></span></div>
+        <div id="ov-board" class="feed"></div>
+      </div>
+      <div class="panel" id="ov-viewer-panel" style="display:none">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div><h2 style="margin:0">Screen — <span id="ov-viewer-name"></span></h2>
+            <div class="muted" id="ov-viewer-status" style="font-size:13px"></div></div>
+          <button class="btn danger" id="ov-viewer-stop">Stop viewing</button>
+        </div>
+        <video id="ov-video" autoplay playsinline muted style="width:100%;border-radius:12px;margin-top:14px;background:#000;max-height:60vh"></video>
+      </div>
+    </div>
+
+    <!-- People / provisioning (WFM, Admin) -->
+    <div id="tab-people" class="hide">
+      <div class="grid2">
+        <div class="panel">
+          <h2>Add a user</h2>
+          <div class="sub">Create a login for a floor employee, team lead, or manager. The employee code is generated automatically.</div>
+          <label class="fld"><span>Role</span>
+            <select id="pp-role">
+              <option value="EMPLOYEE">Floor employee (EMP)</option>
+              <option value="TEAM_LEAD">Team lead (TL)</option>
+              <option value="MANAGER">Manager (MGR)</option>
+              <option value="PAYROLL">Payroll specialist (PAY)</option>
+            </select></label>
+          <label class="fld"><span>Full name</span><input id="pp-name" placeholder="e.g. Sam Reyes" maxlength="80"/></label>
+          <label class="fld"><span>Email</span><input id="pp-email" type="email" placeholder="name@acme.test" autocomplete="off"/></label>
+          <label class="fld"><span>Temporary password</span><input id="pp-pass" type="text" placeholder="at least 8 characters" autocomplete="off"/></label>
+          <button class="btn primary" id="pp-add" style="width:100%;margin-top:4px">Create user</button>
+          <div class="muted" style="font-size:12px;margin-top:10px">They sign in with this email + password, then set up an authenticator app on first login.</div>
+        </div>
+        <div class="panel">
+          <h2>People</h2>
+          <div class="sub">Everyone in your organization.</div>
+          <div id="pp-list" class="feed"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Teams (WFM, Admin) -->
+    <div id="tab-teams" class="hide">
+      <div class="panel">
+        <h2>Build a team</h2>
+        <div class="sub">Create a team, then set its manager and team lead and add members.</div>
+        <div class="row" style="gap:8px">
+          <input id="tm-name" placeholder="e.g. Team Bravo" style="flex:1;width:auto" maxlength="60"/>
+          <button class="btn primary" id="tm-create" style="width:auto;white-space:nowrap;padding:10px 20px">Create team</button>
+        </div>
+      </div>
+      <div id="tm-list"></div>
+    </div>
+
+    <!-- Payroll (Payroll specialist, Admin) -->
+    <div id="tab-payroll" class="hide">
+      <div class="grid2">
+        <div class="panel">
+          <h2>Run payroll</h2>
+          <div class="sub">Pick a pay period. Pay = worked hours (breaks excluded) + overtime worked inside a WFM-authorized OT window + night-shift differential.</div>
+          <div class="row" style="gap:10px">
+            <label class="fld" style="margin:0;flex:1;min-width:130px"><span>Start date</span><input id="pr-start" type="date"/></label>
+            <label class="fld" style="margin:0;flex:1;min-width:130px"><span>End date</span><input id="pr-end" type="date"/></label>
+          </div>
+          <button class="btn primary" id="pr-run" style="width:100%;margin-top:8px">Run payroll</button>
+          <div id="pr-results" class="feed" style="margin-top:14px"></div>
+        </div>
+        <div class="panel">
+          <h2>Pay rates</h2>
+          <div class="sub">Set each person's hourly rate (₱/hr).</div>
+          <div id="pr-rates" class="feed"></div>
+        </div>
+      </div>
+
+      <!-- Deductions & allowances (reusable pay components) -->
+      <div class="panel">
+        <h2>Deductions &amp; allowances</h2>
+        <div class="sub">Reusable components (SSS, PhilHealth, allowances…). Applied when you generate payslips — you can still edit any amount on an individual payslip.</div>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          <label class="fld" style="margin:0;flex:1;min-width:130px"><span>Type</span>
+            <select id="pc-kind"><option value="DEDUCTION">Deduction</option><option value="ALLOWANCE">Allowance</option></select></label>
+          <label class="fld" style="margin:0;flex:2;min-width:150px"><span>Name</span><input id="pc-name" placeholder="e.g. SSS" maxlength="60"/></label>
+          <label class="fld" style="margin:0;flex:1;min-width:150px"><span>Computation</span>
+            <select id="pc-method"><option value="FIXED">Fixed amount</option><option value="PERCENT_OF_GROSS">% of gross</option><option value="BRACKET">Bracket table</option></select></label>
+        </div>
+        <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px">
+          <label class="fld" id="pc-amount-wrap" style="margin:0;flex:1;min-width:130px"><span>Amount (₱)</span><input id="pc-amount" type="number" min="0" step="0.01"/></label>
+          <label class="fld hide" id="pc-percent-wrap" style="margin:0;flex:1;min-width:130px"><span>Percent (%)</span><input id="pc-percent" type="number" min="0" step="0.01"/></label>
+          <label class="fld" style="margin:0;flex:1;min-width:150px"><span>Applies to</span>
+            <select id="pc-scope"><option value="ORG">Everyone</option><option value="TEAM">A team / account</option><option value="EMPLOYEE">One employee</option></select></label>
+          <label class="fld hide" id="pc-target-wrap" style="margin:0;flex:2;min-width:150px"><span>Target</span><select id="pc-target"></select></label>
+        </div>
+        <div class="hide" id="pc-brackets-wrap" style="margin:2px 0 10px">
+          <div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Bracket table</div>
+          <div class="muted" style="font-size:12px;margin-bottom:10px">Bands are checked top to bottom — the first one whose ceiling covers the gross pay applies. Leave “Up to” empty for the highest band (no ceiling).</div>
+          <div id="pc-brackets-rows"></div>
+          <button type="button" class="btn ghost" id="pc-bracket-add" style="padding:6px 12px;font-size:12px;margin-top:4px">+ Add band</button>
+        </div>
+        <button class="btn primary" id="pc-add" style="width:100%;margin-top:4px">Add component</button>
+        <div id="pc-list" class="feed" style="margin-top:14px"></div>
+      </div>
+
+      <!-- Payslip generation, editing & release -->
+      <div class="panel">
+        <h2>Payslips</h2>
+        <div class="sub">Generate payslips for the pay period selected above, fine-tune line items, then release them so employees can view their slip.</div>
+        <button class="btn primary" id="pr-generate" style="width:100%">Generate payslips for the selected period</button>
+        <div id="pr-payslips" class="feed" style="margin-top:14px"></div>
+        <div id="pr-editor" style="margin-top:6px"></div>
+      </div>
+    </div>
+
+    <!-- My payslips (every member, any role) -->
+    <div id="tab-payslips" class="hide">
+      <div class="grid2">
+        <div class="panel">
+          <h2>My payslips</h2>
+          <div class="sub">Your released payslips. Click one to see the full breakdown.</div>
+          <div id="my-payslip-list" class="feed"></div>
+        </div>
+        <div class="panel">
+          <h2>Payslip detail</h2>
+          <div class="sub" id="my-payslip-hint">Select a payslip to view its earnings, allowances, and deductions.</div>
+          <div id="my-payslip-body"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+<div id="shareBanner" class="hide" style="position:fixed;top:0;left:0;right:0;background:var(--amber);color:#1a1205;padding:9px 16px;text-align:center;font-size:13px;font-weight:600;z-index:60;display:flex;align-items:center;justify-content:center;gap:12px">
+  <span>🔴 Your screen is being shared with <span id="shareWith"></span></span>
+  <button id="shareStopBtn" class="btn" style="padding:3px 12px;font-size:12px;background:#1a1205;color:var(--amber);border-color:#1a1205">Stop sharing</button>
+</div>
+<div id="toasts"></div>
+
+<div id="modalOverlay" class="modal-overlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="ic" id="modalIcon">!</div>
+    <h3 id="modalTitle"></h3>
+    <div class="modal-msg" id="modalMsg"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="modalCancel">Cancel</button>
+      <button class="btn" id="modalConfirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="qrcode.min.js"></script>
+<script src="jspdf.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
