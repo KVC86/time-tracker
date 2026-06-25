@@ -100,7 +100,13 @@ export class EnforcementWorker implements OnModuleInit {
           await this.expireShift(job.data.timeEntryId);
         }
       },
-      { connection, concurrency: 50 },
+      // Cap concurrency below the DB connection pool. In dev the API, gateway,
+      // worker, and 30s sweep all share one Prisma pool (~13 by default); a
+      // 50-wide worker starves it under a job burst, and the sweep then times
+      // out fetching a connection (P2024) so overdue breaks never get enforced.
+      // Prod runs workers as a separate tier (own pool via PgBouncer) and can
+      // raise this via ENFORCEMENT_CONCURRENCY.
+      { connection, concurrency: Number(process.env.ENFORCEMENT_CONCURRENCY ?? 10) },
     );
 
     // Reconciliation sweep — backstop for any job lost to a Redis flush.
