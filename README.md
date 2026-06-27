@@ -91,6 +91,8 @@ Additional users (agents, team leads, managers) are created from the admin endpo
 
 Two supported paths. **Docker Compose (Path A) is recommended** — it brings up the app, PostgreSQL, and Redis together, and the app provisions its own database schema on first boot. Path B runs from source if you'd rather not use containers.
 
+> **Want a full single-server walkthrough?** [`DEPLOY-VULTR.md`](DEPLOY-VULTR.md) is a complete, copy-pasteable runbook for one small Ubuntu VPS (sudo user, swap, Docker, **Nginx reverse proxy + HTTPS**, SSH hardening) — start there if you're deploying to a single box.
+
 > Heads-up: cloning the repo onto a server does **not** start anything by itself, and the CI/CD pipeline does **not** deploy to your server (it runs on GitHub's runners and only publishes a container image). You run one of the paths below once; after that the app stays up via `restart: unless-stopped` (Path A) or your process manager (Path B).
 
 ### Prerequisites
@@ -195,3 +197,4 @@ This is CI + image publishing, **not** auto-deploy-to-your-server. To make each 
 - [`README-architecture.md`](README-architecture.md) — the scaling decisions, production topology, data model, API surface, and build sequence.
 - [`RUN-LOCALLY.md`](RUN-LOCALLY.md) — run it locally and exercise every rule by hand.
 - [`RUN-AUTH.md`](RUN-AUTH.md) — apply and test real login + role-based MFA.
+- [`DEPLOY-VULTR.md`](DEPLOY-VULTR.md) — deploy on a single Ubuntu VPS with Nginx + HTTPS (sudo-user runbook).
