@@ -18,13 +18,34 @@ docker compose exec -T postgres psql -U wfm -d wfm < prisma/extra.sql
 npm run start:dev
 ```
 
-`migrate reset` re-runs the seed automatically, which now prints two logins:
+`migrate reset` re-runs the seed automatically, which now prints **one** login — the default Workforce Management (WFM) account:
 
 ```
-AGENT  (email OTP MFA):  john.doe@acme.test  OR  EMP-12
-TEAM LEAD (TOTP MFA):    jane.smith@acme.test OR  TL-04
-Password for both: Password123!
+WFM (TOTP app MFA):  alex.cruz@acme.test  OR  WFM-01
+Password: Password123!
 ```
+
+> **The default seed creates only this WFM account.** Agents, team leads, managers, and payroll users are no longer seeded — you create them from the admin API once signed in as WFM (the WFM role is allowed to call `POST /admin/users`). See [§1a](#1a-create-the-other-users-agent--team-lead) below before running the agent/Team-Lead flows.
+
+### 1a. Create the other users (agent + team lead)
+
+First sign in as WFM and get an access token (the WFM account uses **TOTP** — follow the TOTP steps in [§3](#3-test-the-team-lead-flow-totp), substituting `alex.cruz@acme.test`). With that token:
+
+```bash
+WFM_ACCESS=PASTE_WFM_ACCESS_TOKEN
+
+# Create a floor agent (email-OTP MFA):
+curl -s -X POST localhost:3000/admin/users \
+  -H 'content-type: application/json' -H "Authorization: Bearer $WFM_ACCESS" \
+  -d '{"role":"EMPLOYEE","fullName":"John Doe","email":"john.doe@acme.test","password":"Password123!"}'
+
+# Create a team lead (TOTP MFA):
+curl -s -X POST localhost:3000/admin/users \
+  -H 'content-type: application/json' -H "Authorization: Bearer $WFM_ACCESS" \
+  -d '{"role":"TEAM_LEAD","fullName":"Jane Smith","email":"jane.smith@acme.test","password":"Password123!"}'
+```
+
+Each call returns the generated `employeeCode` (e.g. `EMP-13`, `TL-05`). Now the agent and Team-Lead flows below work exactly as written.
 
 ---
 

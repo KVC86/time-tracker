@@ -78,14 +78,36 @@ This generates the Prisma client and creates every table from `schema.prisma`.
 docker compose exec -T postgres psql -U wfm -d wfm < prisma/extra.sql
 ```
 
-## 6. Seed a test org + employee
+## 6. Seed a test org + the default WFM account
 ```bash
 npm run seed
 ```
-Copy the two IDs it prints — you'll paste them into request headers:
+The default seed creates **one** account — a Workforce Management (WFM) user — and prints its id:
 ```
-EMPLOYEE  (x-employee-id): clxxxxEMPLOYEE
-TEAM LEAD (x-employee-id): clxxxxTEAMLEAD
+WFM  (x-employee-id): clxxxxWFM
+```
+
+### 6a. Create the agent + team lead the walkthrough uses
+
+The break walkthrough in §8 needs a floor **agent** to clock in, and §8E needs a **team lead** to grant an approval. The default seed no longer creates them, but the WFM account can — the dev auth stub trusts the `x-roles` header, so WFM can call the admin endpoint:
+
+```bash
+WFM=clxxxxWFM   # the id printed above
+
+curl -s -X POST localhost:3000/admin/users \
+  -H 'content-type: application/json' -H "x-employee-id: $WFM" -H 'x-roles: WFM' \
+  -d '{"role":"EMPLOYEE","fullName":"John Doe","email":"john.doe@acme.test","password":"Password123!"}'
+
+curl -s -X POST localhost:3000/admin/users \
+  -H 'content-type: application/json' -H "x-employee-id: $WFM" -H 'x-roles: WFM' \
+  -d '{"role":"TEAM_LEAD","fullName":"Jane Smith","email":"jane.smith@acme.test","password":"Password123!"}'
+```
+
+Then list everyone to grab the new ids (the `x-employee-id` values you'll use below):
+
+```bash
+curl -s localhost:3000/admin/users -H "x-employee-id: $WFM" -H 'x-roles: WFM'
+# → copy the "id" of John Doe (the EMPLOYEE) and Jane Smith (the TEAM_LEAD)
 ```
 
 ## 7. Start the app
