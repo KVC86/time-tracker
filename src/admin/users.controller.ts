@@ -66,7 +66,7 @@ export class UsersController {
     @Body() body: { role: Role; fullName: string; email: string; password: string },
   ) {
     if (!CREATABLE.includes(body.role))
-      throw new BadRequestException('Role must be EMPLOYEE, TEAM_LEAD, or MANAGER.');
+      throw new BadRequestException(`Role must be one of: ${CREATABLE.join(', ')}.`);
     const fullName = (body.fullName ?? '').trim();
     if (!fullName) throw new BadRequestException('Full name is required.');
     const email = (body.email ?? '').trim().toLowerCase();
