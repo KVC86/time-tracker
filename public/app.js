@@ -332,9 +332,10 @@ function connectSocket(){
     const m={SHIFT_STARTED:"Shift started",BREAK_STARTED:"Break started",BREAK_ENDED:"Back to work",
       AUTO_LOGOUT:"Auto-logged out — break overran",SHIFT_EXPIRED:"Shift window ended",
       BREAK_OVERRUN:"Break time exceeded — returned to work",
+      AUTO_CLOCKED_OUT:"Auto-clocked out — break time exceeded",
       CLOCKED_OUT:"Clocked out",LOGGED_OUT_BACKGROUND:"Logged out — shift still running",
       ADDL_GRANTED:"A team lead granted you an additional bio break",ADDL_REVOKED:"Additional bio break revoked"}[ev.type]||ev.type;
-    const kind=(ev.type==="AUTO_LOGOUT"||ev.type==="SHIFT_EXPIRED")?"err":(ev.type==="ADDL_GRANTED"?"ok":"warn");
+    const kind=(ev.type==="AUTO_LOGOUT"||ev.type==="SHIFT_EXPIRED"||ev.type==="AUTO_CLOCKED_OUT")?"err":(ev.type==="ADDL_GRANTED"?"ok":"warn");
 
     // Prevent duplicate activity toasts: only show if event type differs from the last one, or after a short delay
     if(ev.type!=="SHIFT_STARTED"||ev.type!==lastActivityEventType){ toast(m,kind); lastActivityEventType=ev.type; }

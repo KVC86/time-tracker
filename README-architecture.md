@@ -78,7 +78,7 @@ You can start cheaper (2 app nodes, no replica) and add the replica + third node
 
 The schema turns your in-memory `S = {...}` state and `localStorage` keys into durable, indexed tables:
 
-- **`TimeEntry`** is the shift window — `clockInAt` + the 8-hour absolute end. It stays `OPEN` (shift running in the background) even after a "logout," exactly like your prototype; only the 8-hour expiry job or an explicit clock-out closes it.
+- **`TimeEntry`** is the shift window — `clockInAt` + the 8-hour absolute end. It stays `OPEN` (shift running in the background) even after a "logout"; it is closed by an explicit clock-out, the 8-hour expiry job, or — for a floor-level employee — a **break overrun auto-clock-out** (a bio/regular break that exceeds its limit ends the shift and stops paid-time tracking).
 - **`ActivitySession`** rows open/close as the employee switches Productivity ↔ Inbound Calls ↔ etc., or logs out (no open session = "away," shift still ticking).
 - **`BreakEntry`** carries the critical **`deadlineAt`** column that drives the scheduler, plus `exceeded`.
 - **`BreakApproval`** replaces `tc_addl_bio_approval` with `GRANTED → CONSUMED / REVOKED` states, queryable and auditable.
