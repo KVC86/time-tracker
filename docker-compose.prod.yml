@@ -1,0 +1,55 @@
+# Run the whole stack on a server from the published image:
+#
+#   echo "JWT_SECRET=$(openssl rand -hex 32)" > .env
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# The app applies migrations + partial indexes on boot (see docker-entrypoint.sh),
+# so the database is provisioned automatically the first time it starts.
+services:
+  app:
+    image: ghcr.io/kvc86/time-tracker:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql://wfm:${POSTGRES_PASSWORD:-wfm}@postgres:5432/wfm?schema=public"
+      DIRECT_DATABASE_URL: "postgresql://wfm:${POSTGRES_PASSWORD:-wfm}@postgres:5432/wfm?schema=public"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      PORT: "3000"
+      WEB_ORIGIN: "${WEB_ORIGIN:-*}"
+      # Required — refuses to start without it. Put it in .env (never commit it).
+      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env (e.g. openssl rand -hex 32)}"
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: wfm
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-wfm}"
+      POSTGRES_DB: wfm
+    volumes:
+      - wfm_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wfm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  wfm_pgdata:

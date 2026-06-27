@@ -77,6 +77,22 @@ Then follow [`RUN-LOCALLY.md`](RUN-LOCALLY.md) §8 to watch the break, overrun, 
 | `npm run seed` | Seed a test organization, agent, and team lead |
 | `npm test` | Run the Jest suite |
 
+## CI/CD & deployment
+
+Every push and PR runs the **CI** pipeline ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): it spins up Postgres + Redis, installs, runs migrations and the partial-index SQL, seeds, builds, and runs the test suite. On a green push to `main` it then builds a Docker image and publishes it to **GitHub Container Registry (GHCR)** at `ghcr.io/kvc86/time-tracker:latest` — so a broken build never produces an image.
+
+The image is self-provisioning: on boot it runs `prisma migrate deploy` and applies `prisma/extra.sql` before starting (see [`docker-entrypoint.sh`](docker-entrypoint.sh)).
+
+**Run the full stack on a server** (needs only Docker):
+
+```bash
+echo "JWT_SECRET=$(openssl rand -hex 32)" > .env   # required secret
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d     # app + Postgres + Redis on :3000
+```
+
+> **Note:** cloning the repo onto a server does **not** auto-deploy it — CI/CD runs on GitHub's runners, triggered by pushes, not by `git clone`. The command above is the one-time manual start. To make pushes redeploy automatically you'd add a deploy step targeting your specific host (VM/PaaS/k8s) on top of the published image.
+
 ## Documentation
 
 - [`README-architecture.md`](README-architecture.md) — the scaling decisions, production topology, data model, API surface, and build sequence.
