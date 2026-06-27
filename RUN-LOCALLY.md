@@ -153,9 +153,9 @@ curl -s -X POST localhost:3000/time/break/start \
   -H 'content-type: application/json' -H "x-employee-id: $EMP" \
   -d '{"breakType":"BIO"}'
 ```
-Watch the app terminal. ~20s later the deadline job fires server-side: it ends the overrun break, puts the employee back on their pre-break activity, and records a violation. The shift **stays open** — only the 8-hour expiry (step F) auto-closes a shift. Confirm:
+Watch the app terminal. When the deadline passes, the job fires server-side: for a **floor-level employee** it ends the overrun break, **auto-clocks them out** (the shift is closed and paid-time tracking stops), and records a violation. (Privileged staff — TL/WFM/Manager/etc. — are instead returned to work with the shift left open.) Confirm:
 ```bash
-curl -s localhost:3000/time/me -H "x-employee-id: $EMP"   # onShift: true, back on an activity, bio tally incremented
+curl -s localhost:3000/time/me -H "x-employee-id: $EMP"   # onShift: false — auto-clocked-out on overrun
 docker compose exec postgres psql -U wfm -d wfm \
   -c 'select type, detail, "occurredAt" from compliance_violations order by "occurredAt" desc limit 3;'
 ```

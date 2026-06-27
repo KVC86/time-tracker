@@ -11,8 +11,10 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-// ── #6: a break overrun ends the break and resumes work; the shift stays OPEN
-describe('enforceBreak — overrun ends the break, keeps the shift open (#6)', () => {
+// ── A break overrun by a floor-level employee auto-clocks them out and stops
+//    paid-time tracking (privileged staff keep the gentler resume behavior —
+//    see break-overrun-clockout.spec.ts).
+describe('enforceBreak — overrun auto-clocks-out a floor employee', () => {
   let orgId: string;
   let empId: string;
   let teId: string;
@@ -49,7 +51,7 @@ describe('enforceBreak — overrun ends the break, keeps the shift open (#6)', (
     await cleanupOrg(prisma, orgId);
   });
 
-  it('ends the break (exceeded), resumes the prior activity, and leaves the shift OPEN', async () => {
+  it('ends the break (exceeded), closes the shift, and stops paid-time tracking', async () => {
     await (worker as any).enforceBreak(breakId);
 
     const brk = await prisma.breakEntry.findUnique({ where: { id: breakId } });
@@ -57,21 +59,20 @@ describe('enforceBreak — overrun ends the break, keeps the shift open (#6)', (
     expect(brk!.exceeded).toBe(true);
 
     const te = await prisma.timeEntry.findUnique({ where: { id: teId } });
-    expect(te!.status).toBe('OPEN'); // NOT auto-closed — the #6 behavior change
-    expect(te!.clockOutAt).toBeNull();
+    expect(te!.status).toBe('AUTO_CLOSED'); // auto-clocked-out on overrun
+    expect(te!.clockOutAt).not.toBeNull();
 
-    // A fresh activity session resuming the pre-break activity.
+    // Paid-time tracking stopped: no session left open, and none resumed.
     const open = await prisma.activitySession.findFirst({
       where: { timeEntryId: teId, endedAt: null },
-      orderBy: { startedAt: 'desc' },
     });
-    expect(open).not.toBeNull();
-    expect(open!.activityType).toBe('Inbound Calls');
+    expect(open).toBeNull();
 
-    // A compliance violation is still recorded.
+    // A compliance violation is recorded, noting the auto-clock-out.
     const v = await prisma.complianceViolation.findFirst({
       where: { employeeId: empId, type: 'BREAK_OVERRUN' },
     });
     expect(v).not.toBeNull();
+    expect(v!.detail).toMatch(/auto-clocked-out/);
   });
 });

@@ -19,7 +19,7 @@ import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { Queue, Worker, JobsOptions } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeEventsPublisher } from './time-tracking.gateway';
-import { TimeEntryStatus, ViolationType } from '@prisma/client';
+import { Role, TimeEntryStatus, ViolationType } from '@prisma/client';
 
 const connection = {
   host: process.env.REDIS_HOST ?? '127.0.0.1',
@@ -27,6 +27,10 @@ const connection = {
 };
 
 const QUEUE = 'time-enforcement';
+
+// Privileged roles are exempt from the hard auto-clock-out on break overrun;
+// only floor-level employees get clocked out (everyone else just resumes work).
+const EXEMPT_ROLES: Role[] = ['TEAM_LEAD', 'WFM', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN'];
 
 type JobData =
   | { kind: 'BREAK_DEADLINE'; breakId: string }
@@ -114,8 +118,9 @@ export class EnforcementWorker implements OnModuleInit {
     this.log.log('Enforcement worker started (deadline jobs + 30s sweep)');
   }
 
-  /** Auto-logout if the break is still open at its deadline. Ports the
-   *  prototype's "bEl >= lim → doLogout" branch, server-side. */
+  /** Enforce a break that's still open at its deadline. Floor-level employees
+   *  are AUTO-CLOCKED-OUT (shift closed, paid-time tracking stops); privileged
+   *  staff just have the break ended and resume work. */
   private async enforceBreak(breakId: string) {
     const brk = await this.prisma.breakEntry.findUnique({
       where: { id: breakId },
@@ -128,8 +133,67 @@ export class EnforcementWorker implements OnModuleInit {
     const now = new Date();
     const employeeId = brk.timeEntry.employeeId;
 
-    // Resume the activity the employee was on before the break (no session is
-    // open during a break, so the most recent one is the pre-break activity).
+    // Who is this? Floor-level employees get auto-clocked-out on overrun.
+    const emp = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { user: { select: { roles: true } } },
+    });
+    const roles = emp?.user?.roles ?? [];
+    const isFloorEmployee = !roles.some((r) => EXEMPT_ROLES.includes(r));
+
+    if (isFloorEmployee) {
+      // ── AUTO CLOCK-OUT ────────────────────────────────────────────────
+      // End the break, close every open activity session, and CLOSE the shift.
+      // With the shift CLOSED and no session open, no further paid time accrues
+      // — paid-time tracking stops at `now`.
+      await this.prisma.$transaction([
+        this.prisma.breakEntry.update({
+          where: { id: brk.id },
+          data: { endedAt: now, exceeded: true },
+        }),
+        this.prisma.activitySession.updateMany({
+          where: { timeEntryId: brk.timeEntryId, endedAt: null },
+          data: { endedAt: now },                 // stop paid-time accrual
+        }),
+        this.prisma.timeEntry.update({
+          where: { id: brk.timeEntryId },
+          data: { status: TimeEntryStatus.AUTO_CLOSED, clockOutAt: now }, // clock out
+        }),
+        this.prisma.complianceViolation.create({
+          data: {
+            employeeId,
+            type: ViolationType.BREAK_OVERRUN,
+            detail: `${brk.breakType} break exceeded its limit; employee auto-clocked-out.`,
+          },
+        }),
+        this.prisma.auditLog.create({
+          data: {
+            action: 'BREAK_OVERRUN_AUTO_LOGOUT',
+            entity: 'TimeEntry',
+            entityId: brk.timeEntryId,
+            payload: { breakType: brk.breakType, breakId: brk.id },
+          },
+        }),
+      ]);
+
+      // The pending 8-hour SHIFT_EXPIRY job will simply no-op now that the shift
+      // is CLOSED (it checks status === OPEN), so there's nothing to cancel.
+
+      this.events.toEmployee(employeeId, {
+        type: 'AUTO_CLOCKED_OUT',
+        reason: 'BREAK_OVERRUN',
+        breakType: brk.breakType,
+      });
+      this.events.toApprovers(employeeId, {
+        type: 'EMPLOYEE_AUTO_CLOCKED_OUT',
+        employeeId,
+        breakType: brk.breakType,
+      });
+      return;
+    }
+
+    // ── PRIVILEGED STAFF: end the break and resume their prior activity ──
+    // (no session is open during a break, so the most recent one is pre-break).
     const prior = await this.prisma.activitySession.findFirst({
       where: { timeEntryId: brk.timeEntryId },
       orderBy: { startedAt: 'desc' },
@@ -137,9 +201,6 @@ export class EnforcementWorker implements OnModuleInit {
     });
     const resumeType = prior?.activityType ?? 'Productivity';
 
-    // End the overrun break and put the employee back to work — the SHIFT STAYS
-    // OPEN. Only the 8-hour expiry auto-closes a shift; a break overrun no longer
-    // does (it was both too harsh and trivially undone by clocking back in).
     await this.prisma.$transaction([
       this.prisma.breakEntry.update({
         where: { id: brk.id },
