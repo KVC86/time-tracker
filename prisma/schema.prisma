@@ -64,6 +64,7 @@ enum ViolationType {
   BREAK_OVERRUN
   SHIFT_EXPIRED
   OUT_OF_SCHEDULE_LOGIN
+  IDLE_TIMEOUT
 }
 
 enum LeaveType {

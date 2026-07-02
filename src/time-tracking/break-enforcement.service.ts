@@ -30,7 +30,8 @@ const QUEUE = 'time-enforcement';
 
 // Privileged roles are exempt from the hard auto-clock-out on break overrun;
 // only floor-level employees get clocked out (everyone else just resumes work).
-const EXEMPT_ROLES: Role[] = ['TEAM_LEAD', 'WFM', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN'];
+// Exported: the idle-events endpoint applies the same floor-level definition.
+export const EXEMPT_ROLES: Role[] = ['TEAM_LEAD', 'WFM', 'MANAGER', 'HR', 'PAYROLL', 'ADMIN'];
 
 type JobData =
   | { kind: 'BREAK_DEADLINE'; breakId: string }
