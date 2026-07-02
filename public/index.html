@@ -98,18 +98,21 @@
       <div class="grid2">
         <div class="panel">
           <h2>Request leave</h2>
-          <div class="sub">Submit a leave request for your team lead to review. Leave must be requested at least 3 days in advance.</div>
+          <div class="sub">Submit a leave request for your team lead to review. Vacation leave needs at least 3 days' notice; Sick, Emergency, and Birthday leave can be filed any time, including the same day.</div>
           <label class="fld"><span>Leave type</span>
             <select id="lv-type">
               <option value="VACATION">Vacation</option>
               <option value="SICK">Sick</option>
               <option value="EMERGENCY">Emergency</option>
-              <option value="UNPAID">Unpaid</option>
+              <option value="BIRTHDAY">Birthday</option>
             </select></label>
           <label class="fld"><span>Start date</span><input id="lv-start" type="date"/></label>
           <label class="fld"><span>End date</span><input id="lv-end" type="date"/></label>
           <label class="fld"><span>Reason <span class="muted">(optional)</span></span>
             <input id="lv-reason" placeholder="Brief description…" maxlength="200"/></label>
+          <label class="fld hide" id="lv-docs-fld"><span>Supporting documents <span class="muted">(images — proof of absence, optional)</span></span>
+            <input id="lv-docs" type="file" accept="image/*" multiple/></label>
+          <div id="lv-docs-preview" style="display:flex;flex-wrap:wrap;gap:6px;margin:-2px 0 6px"></div>
           <button class="btn primary" id="lv-submit" style="width:100%;margin-top:4px">Submit request</button>
         </div>
         <div class="panel">

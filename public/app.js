@@ -85,6 +85,8 @@ document.getElementById("li-go").onclick=async()=>{
   if(!id||!pw){err.textContent="Enter your login and password.";return;}
   try{
     const r=await api("/auth/login",{method:"POST",auth:false,body:{identifier:id,password:pw}});
+    // Experimental MFA-exempt account: server returns tokens immediately (no second factor).
+    if(r.status==="OK" && r.accessToken){ store.set("tt_access",r.accessToken); store.set("tt_refresh",r.refreshToken); await boot(); return; }
     mfaToken=r.mfaToken;
     const sub=document.getElementById("mfa-sub");
     const enroll=document.getElementById("mfa-enroll");
@@ -997,8 +999,21 @@ document.getElementById("tm-create").onclick=async()=>{
 };
 
 // ── LEAVE ──
-const LEAVE_LABELS={VACATION:"Vacation",SICK:"Sick",EMERGENCY:"Emergency",UNPAID:"Unpaid"};
+const LEAVE_LABELS={VACATION:"Vacation",SICK:"Sick",EMERGENCY:"Emergency",BIRTHDAY:"Birthday"};
+// Pay policy: Vacation is paid; Sick, Emergency and Birthday are unpaid.
+const LEAVE_PAID={VACATION:true,SICK:false,EMERGENCY:false,BIRTHDAY:false};
 const LEAVE_STATUS_CLS={PENDING:"info",APPROVED:"ok",REJECTED:"viol"};
+// "Paid"/"Unpaid" chip. Prefers the server-provided flag, falls back to policy map.
+function payTag(r){ const paid=(r&&r.paid!==undefined)?r.paid:LEAVE_PAID[r.leaveType]; return `<span class="tag ${paid?"ok":""}" style="margin-left:6px">${paid?"Paid":"Unpaid"}</span>`; }
+// Thumbnails for Sick/Emergency supporting images (base64 data URLs). Server
+// only ever stores `data:image/…` URLs, so they're safe to render as <img>.
+function attachmentsHtml(r){
+  const a=(r&&Array.isArray(r.attachments))?r.attachments:[];
+  if(!a.length) return "";
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">`+
+    a.map(src=>`<a href="${src}" target="_blank" rel="noopener"><img src="${src}" alt="attachment" style="width:46px;height:46px;object-fit:cover;border-radius:6px;border:1px solid var(--line)"></a>`).join("")+
+    `</div>`;
+}
 
 document.getElementById("lv-submit").onclick=async()=>{
   const btn=document.getElementById("lv-submit");
@@ -1009,11 +1024,14 @@ document.getElementById("lv-submit").onclick=async()=>{
   if(!start||!end){toast("Pick a start and end date.","err");return;}
   btn.disabled=true; btn.textContent="Submitting…";
   try{
-    const r=await api("/leave",{method:"POST",body:{leaveType:type,startDate:start,endDate:end,reason:reason||undefined}});
+    const body={leaveType:type,startDate:start,endDate:end,reason:reason||undefined};
+    if((type==="SICK"||type==="EMERGENCY")&&leaveAttachments.length) body.attachments=leaveAttachments.slice();
+    const r=await api("/leave",{method:"POST",body});
     toast(r.overrode>0?"Request submitted — replaced your previous request for these dates":"Leave request submitted","ok");
     document.getElementById("lv-start").value="";
     document.getElementById("lv-end").value="";
     document.getElementById("lv-reason").value="";
+    leaveAttachments=[]; renderDocsPreview();
     loadMyLeave();
   }catch(e){toast(e.message,"err");}
   finally{btn.disabled=false;btn.textContent="Submit request";}
@@ -1022,13 +1040,55 @@ document.getElementById("lv-submit").onclick=async()=>{
 function dateStr(d){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
-function minLeaveStr(){ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+3); return dateStr(d); }
+const lvType=document.getElementById("lv-type");
+// Only Vacation needs advance notice (3 days); Sick, Emergency and Birthday may start same-day.
+function leaveNoticeDays(type){ return type==="VACATION"?3:0; }
+function minLeaveStr(type){ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+leaveNoticeDays(type||(lvType&&lvType.value))); return dateStr(d); }
 const lvStart=document.getElementById("lv-start"), lvEnd=document.getElementById("lv-end");
-lvStart.min=minLeaveStr(); lvEnd.min=minLeaveStr();
+function applyLeaveMin(){ const m=minLeaveStr(); lvStart.min=m; if(lvStart.value&&lvStart.value<m) lvStart.value=""; lvEnd.min=lvStart.value||m; if(lvEnd.value&&lvStart.value&&lvEnd.value<lvStart.value) lvEnd.value=lvStart.value; }
 lvStart.onchange=()=>{ lvEnd.min=lvStart.value||minLeaveStr(); if(lvEnd.value&&lvEnd.value<lvStart.value) lvEnd.value=lvStart.value; };
 
+// ── Supporting documents (Sick/Emergency only) ──
+const lvDocsFld=document.getElementById("lv-docs-fld");
+const lvDocs=document.getElementById("lv-docs");
+const lvDocsPreview=document.getElementById("lv-docs-preview");
+let leaveAttachments=[];
+function docsAllowed(){ const t=lvType&&lvType.value; return t==="SICK"||t==="EMERGENCY"; }
+function renderDocsPreview(){
+  if(!lvDocsPreview) return;
+  lvDocsPreview.innerHTML="";
+  leaveAttachments.forEach((src,i)=>{
+    const w=document.createElement("span"); w.style.cssText="position:relative;display:inline-block";
+    const img=document.createElement("img"); img.src=src; img.style.cssText="width:54px;height:54px;object-fit:cover;border-radius:8px;border:1px solid var(--line)";
+    const x=document.createElement("button"); x.type="button"; x.textContent="×"; x.title="Remove";
+    x.style.cssText="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:var(--red,#c0392b);color:#fff;cursor:pointer;font-size:12px;line-height:1;padding:0";
+    x.onclick=()=>{ leaveAttachments.splice(i,1); renderDocsPreview(); };
+    w.appendChild(img); w.appendChild(x); lvDocsPreview.appendChild(w);
+  });
+}
+function syncDocsVisibility(){
+  const show=docsAllowed();
+  if(lvDocsFld) lvDocsFld.classList.toggle("hide",!show);
+  if(!show){ leaveAttachments=[]; if(lvDocs) lvDocs.value=""; renderDocsPreview(); }
+}
+if(lvDocs) lvDocs.onchange=()=>{
+  const files=Array.from(lvDocs.files||[]); lvDocs.value="";
+  for(const f of files){
+    if(leaveAttachments.length>=5){ toast("You can attach at most 5 images.","err"); break; }
+    if(!f.type.startsWith("image/")){ toast(`"${f.name}" is not an image.`,"err"); continue; }
+    if(f.size>1500000){ toast(`"${f.name}" is too large (max 1.5 MB).`,"err"); continue; }
+    const rd=new FileReader();
+    rd.onload=()=>{ if(leaveAttachments.length<5){ leaveAttachments.push(rd.result); renderDocsPreview(); } };
+    rd.readAsDataURL(f);
+  }
+};
+
+applyLeaveMin();
+syncDocsVisibility();
+if(lvType) lvType.onchange=()=>{ applyLeaveMin(); syncDocsVisibility(); };
+
 async function loadMyLeave(){
-  lvStart.min=minLeaveStr(); if(!lvEnd.value) lvEnd.min=minLeaveStr();
+  applyLeaveMin();
   try{
     const list=await api("/leave/my");
     const box=document.getElementById("lv-list"); box.innerHTML="";
@@ -1038,9 +1098,10 @@ async function loadMyLeave(){
       const cls=LEAVE_STATUS_CLS[r.status]||"info";
       const dates=fmtDate(r.startDate)+(r.startDate!==r.endDate?" → "+fmtDate(r.endDate):"");
       row.innerHTML=`<time>${fmtDate(r.submittedAt)}</time><span class="tag ${cls}">${r.status}</span>`+
-        `<div style="flex:1"><b>${LEAVE_LABELS[r.leaveType]}</b> · ${dates}`+
+        `<div style="flex:1"><b>${LEAVE_LABELS[r.leaveType]}</b>${payTag(r)} · ${dates}`+
         (r.reason?`<div class="muted" style="font-size:12px">${esc(r.reason)}</div>`:"")+
         (r.reviewNote?`<div class="muted" style="font-size:12px">Note: ${esc(r.reviewNote)}</div>`:"")+
+        attachmentsHtml(r)+
         `</div>`;
       box.appendChild(row);
     });
@@ -1059,8 +1120,9 @@ async function loadLeaveRequests(){
       const notice=r.onTime
         ?`<span class="tag ok" title="Submitted ${r.noticeDays} days before the leave date">2+ weeks notice</span>`
         :`<span class="tag viol" title="Submitted only ${r.noticeDays} day${r.noticeDays===1?"":"s"} before the leave date">Late · short notice</span>`;
-      info.innerHTML=`<b>${esc(r.employee.employeeCode)} — ${esc(r.employee.fullName)}</b> · <span class="tag info">${LEAVE_LABELS[r.leaveType]}</span> ${dates} ${notice}`+
-        (r.reason?`<div class="muted" style="font-size:12px">${esc(r.reason)}</div>`:"");
+      info.innerHTML=`<b>${esc(r.employee.employeeCode)} — ${esc(r.employee.fullName)}</b> · <span class="tag info">${LEAVE_LABELS[r.leaveType]}</span>${payTag(r)} ${dates} ${notice}`+
+        (r.reason?`<div class="muted" style="font-size:12px">${esc(r.reason)}</div>`:"")+
+        attachmentsHtml(r);
       const noteInput=document.createElement("input");
       noteInput.placeholder="Optional note…"; noteInput.style.cssText="width:160px;padding:6px 10px;font-size:12px";
       const approve=document.createElement("button"); approve.className="btn primary"; approve.style.cssText="padding:6px 12px;font-size:12px"; approve.textContent="Approve";
