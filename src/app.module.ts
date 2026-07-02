@@ -24,13 +24,14 @@ import { UsersController } from './admin/users.controller';
 import { TeamsController } from './admin/teams.controller';
 import { ProfileController } from './profile/profile.controller';
 import { PayrollController } from './payroll/payroll.controller';
+import { IdleController } from './idle/idle.controller';
 
 @Module({
   imports: [
     PrismaModule, // @Global → PrismaService available everywhere
     AuthModule,   // exports JwtModule + guards used by the controllers/gateway
   ],
-  controllers: [TimeTrackingController, ApprovalsController, ActivityTypesController, ActivityAssignmentsController, LeaveController, SchedulesController, OversightController, UsersController, TeamsController, ProfileController, PayrollController],
+  controllers: [TimeTrackingController, ApprovalsController, ActivityTypesController, ActivityAssignmentsController, LeaveController, SchedulesController, OversightController, UsersController, TeamsController, ProfileController, PayrollController, IdleController],
   providers: [
     TimeTrackingService,
     BreakEnforcementService,
