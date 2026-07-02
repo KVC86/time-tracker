@@ -74,6 +74,19 @@ export class AuthService {
         ).catch(() => false);
     if (!user || !ok) throw new UnauthorizedException('Invalid credentials.');
 
+    // EXPERIMENTAL per-account MFA exemption. A single flagged user (a shared
+    // demo login) skips the second factor and receives tokens immediately.
+    // `mfaExempt` defaults to false, so every other account's two-step login
+    // path below is completely unchanged.
+    if (user.mfaExempt) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() },
+      });
+      const tokens = await this.issueTokens(user.id);
+      return { status: 'OK', ...tokens };
+    }
+
     const method = this.methodFor(user.roles);
     const mfaToken = await this.jwt.signAsync(
       { sub: user.id, typ: 'mfa', method },

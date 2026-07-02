@@ -17,6 +17,22 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LeaveStatus, LeaveType, Role } from '@prisma/client';
 import { TimeEventsPublisher } from '../time-tracking/time-tracking.gateway';
 
+// Leave pay policy: Vacation is the only PAID leave; Sick, Emergency and
+// Birthday are unpaid. Payroll pays for worked time only, so this is a
+// classification surfaced to users — it deliberately does not change any pay
+// computation.
+const PAID_LEAVE_TYPES = new Set<LeaveType>([LeaveType.VACATION]);
+const isPaidLeave = (t: LeaveType) => PAID_LEAVE_TYPES.has(t);
+
+// Advance-notice policy: only Vacation requires advance notice (≥3 days). Sick,
+// Emergency and Birthday leave may be filed at any time, including the same day.
+const ADVANCE_NOTICE_LEAVE_TYPES = new Set<LeaveType>([LeaveType.VACATION]);
+
+// Supporting images (proof of absence) are accepted only for these types.
+const SUPPORTING_DOC_LEAVE_TYPES = new Set<LeaveType>([LeaveType.SICK, LeaveType.EMERGENCY]);
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_LEN = 3_000_000; // ~2 MB as a base64 data URL
+
 interface AuthedReq {
   user: { userId: string; employeeId: string; roles: Role[] };
 }
@@ -31,7 +47,7 @@ export class LeaveController {
 
   /** Employee submits a leave request. */
   @Post()
-  async submit(@Req() req: AuthedReq, @Body() body: { leaveType: LeaveType; startDate: string; endDate: string; reason?: string }) {
+  async submit(@Req() req: AuthedReq, @Body() body: { leaveType: LeaveType; startDate: string; endDate: string; reason?: string; attachments?: string[] }) {
     if (!body.leaveType || !body.startDate || !body.endDate)
       throw new BadRequestException('leaveType, startDate, and endDate are required.');
 
@@ -42,16 +58,34 @@ export class LeaveController {
     if (end < start)
       throw new BadRequestException('endDate must be on or after startDate.');
 
-    // Minimum 3 days notice: earliest allowed start is today + 3 days.
-    // (This also rejects today, tomorrow, the day after, and any past date.)
+    // Advance-notice policy. Sick and Emergency leave may start any time,
+    // including today (same-day filing). Vacation and Birthday leave still
+    // require at least 3 days' notice. In every case a start date in the past
+    // is rejected.
+    const needsNotice = ADVANCE_NOTICE_LEAVE_TYPES.has(body.leaveType);
     const earliest = new Date();
     earliest.setHours(0, 0, 0, 0);
-    earliest.setDate(earliest.getDate() + 3);
+    earliest.setDate(earliest.getDate() + (needsNotice ? 3 : 0));
     const earliestStr = `${earliest.getFullYear()}-${String(earliest.getMonth() + 1).padStart(2, '0')}-${String(earliest.getDate()).padStart(2, '0')}`;
     if (body.startDate < earliestStr)
       throw new BadRequestException(
-        `Leave must be requested at least 3 days in advance. The earliest date you can request is ${earliestStr}.`,
+        needsNotice
+          ? `Vacation leave must be requested at least 3 days in advance. The earliest date you can request is ${earliestStr}.`
+          : `Leave cannot start in the past. The earliest date you can request is ${earliestStr}.`,
       );
+
+    // Supporting images (proof of absence) — accepted only for Sick/Emergency.
+    // For any other type the field is ignored, so nothing else is affected.
+    const rawAttachments = Array.isArray(body.attachments) ? body.attachments : [];
+    const attachments = SUPPORTING_DOC_LEAVE_TYPES.has(body.leaveType) ? rawAttachments : [];
+    if (attachments.length > MAX_ATTACHMENTS)
+      throw new BadRequestException(`You can attach at most ${MAX_ATTACHMENTS} images.`);
+    for (const a of attachments) {
+      if (typeof a !== 'string' || !a.startsWith('data:image/'))
+        throw new BadRequestException('Each attachment must be an image data URL.');
+      if (a.length > MAX_ATTACHMENT_LEN)
+        throw new BadRequestException('Each image must be under ~2 MB.');
+    }
 
     // Override: a new request for dates that overlap an existing request from
     // the same employee replaces the former one(s). Two ranges overlap when
@@ -71,27 +105,30 @@ export class LeaveController {
           startDate:  start,
           endDate:    end,
           reason:     body.reason?.trim() || null,
+          attachments,
         },
-        select: { id: true, leaveType: true, startDate: true, endDate: true, status: true, submittedAt: true },
+        select: { id: true, leaveType: true, startDate: true, endDate: true, status: true, submittedAt: true, attachments: true },
       });
       return { created, overrode: count };
     });
 
-    return { ...created, overrode };
+    return { ...created, paid: isPaidLeave(created.leaveType), overrode };
   }
 
   /** Employee views their own leave requests. */
   @Get('my')
   async myRequests(@Req() req: AuthedReq) {
-    return this.prisma.leaveRequest.findMany({
+    const rows = await this.prisma.leaveRequest.findMany({
       where:   { employeeId: req.user.employeeId },
       orderBy: { submittedAt: 'desc' },
       select: {
         id: true, leaveType: true, startDate: true, endDate: true,
         reason: true, status: true, reviewNote: true, submittedAt: true, reviewedAt: true,
+        attachments: true,
         reviewedBy: { select: { fullName: true } },
       },
     });
+    return rows.map((r) => ({ ...r, paid: isPaidLeave(r.leaveType) }));
   }
 
   /** Team Lead / Manager views pending requests from their team. */
@@ -117,6 +154,7 @@ export class LeaveController {
       orderBy: { submittedAt: 'asc' },
       select: {
         id: true, leaveType: true, startDate: true, endDate: true, reason: true, submittedAt: true,
+        attachments: true,
         employee: { select: { employeeCode: true, fullName: true } },
       },
     });
@@ -128,7 +166,7 @@ export class LeaveController {
       const startUTC = Date.UTC(r.startDate.getUTCFullYear(), r.startDate.getUTCMonth(), r.startDate.getUTCDate());
       const subUTC = Date.UTC(r.submittedAt.getUTCFullYear(), r.submittedAt.getUTCMonth(), r.submittedAt.getUTCDate());
       const noticeDays = Math.round((startUTC - subUTC) / DAY);
-      return { ...r, noticeDays, onTime: noticeDays >= 14 };
+      return { ...r, noticeDays, onTime: noticeDays >= 14, paid: isPaidLeave(r.leaveType) };
     });
   }
 
