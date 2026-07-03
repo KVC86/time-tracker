@@ -434,7 +434,7 @@ model LeaveRequest {
   startDate    DateTime    @db.Date
   endDate      DateTime    @db.Date
   reason       String?
-  attachments  String[]    // Sick/Emergency supporting images (base64 data URLs)
+  attachments  String[]    @default([]) // Sick/Emergency supporting images (base64 data URLs)
   status       LeaveStatus @default(PENDING)
   reviewNote   String?
   submittedAt  DateTime    @default(now())
