@@ -12,6 +12,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { manilaStartOfDay, manilaWorkDate, manilaTimeLabel } from '../common/timezone';
 import { BreakEnforcementService } from './break-enforcement.service';
 import { TimeEventsPublisher } from './time-tracking.gateway';
 import {
@@ -101,11 +102,12 @@ export class TimeTrackingService {
       return this.stateFor(employeeId);
     }
 
-    // Check for a closed or auto-closed shift from today.
+    // Check for a closed or auto-closed shift from today (Manila calendar day
+    // — the business day, independent of the server's timezone).
     // If found and the 8-hour window hasn't expired, re-open it (continue the timer).
     // This allows employees to accidentally clock out, or be auto-logged out by the system,
     // and resume within the same 8-hour shift window, preserving break usage and elapsed time.
-    const today = this.startOfDay(new Date());
+    const today = manilaStartOfDay();
     const closedToday = await this.prisma.timeEntry.findFirst({
       where: {
         employeeId,
@@ -148,13 +150,11 @@ export class TimeTrackingService {
 
     // No closed shift: start a fresh 8-hour window.
     // Scheduled-login window: honour the WFM-assigned schedule for today.
-    // Schedules store workDate as the UTC-midnight of the calendar date, so we
-    // look it up with a UTC-midnight Date built from today's LOCAL Y/M/D.
-    // (startOfDay() returns a local-midnight instant, which is the previous UTC
-    // day in ahead-of-UTC timezones — it would silently never match.)
-    const scheduleDate = new Date(
-      Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()),
-    );
+    // Schedules store workDate as the UTC-midnight of the MANILA calendar
+    // date. Deriving "today" from the server's clock would look up the wrong
+    // row (and skip enforcement) for any shift between 00:00 and 08:00
+    // Manila when the server runs UTC.
+    const scheduleDate = manilaWorkDate();
     const sched = await this.prisma.schedule.findFirst({
       where: { employeeId, workDate: scheduleDate },
     });
@@ -172,10 +172,7 @@ export class TimeTrackingService {
       }
       // Before the scheduled start time → block (the explicit requirement).
       if (sched.scheduledStart && new Date() < sched.scheduledStart) {
-        const startLabel = sched.scheduledStart.toLocaleTimeString([], {
-          hour: '2-digit',
-          minute: '2-digit',
-        });
+        const startLabel = manilaTimeLabel(sched.scheduledStart);
         await this.recordViolation(
           employeeId,
           ViolationType.OUT_OF_SCHEDULE_LOGIN,
@@ -187,10 +184,7 @@ export class TimeTrackingService {
       }
       // After the scheduled end time → the shift is over for today.
       if (sched.scheduledEnd && new Date() > sched.scheduledEnd) {
-        const endLabel = sched.scheduledEnd.toLocaleTimeString([], {
-          hour: '2-digit',
-          minute: '2-digit',
-        });
+        const endLabel = manilaTimeLabel(sched.scheduledEnd);
         await this.recordViolation(
           employeeId,
           ViolationType.OUT_OF_SCHEDULE_LOGIN,
@@ -523,9 +517,4 @@ export class TimeTrackingService {
     if (emp) this.events.toActivity(emp.orgId, { action: 'VIOLATION' });
   }
 
-  private startOfDay(d: Date) {
-    const x = new Date(d);
-    x.setHours(0, 0, 0, 0);
-    return x;
-  }
 }

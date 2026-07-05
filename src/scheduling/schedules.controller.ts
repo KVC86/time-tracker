@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { Role, LeaveStatus } from '@prisma/client';
+import { manilaDateTime } from '../common/timezone';
 
 interface AuthedReq {
   user: { userId: string; employeeId: string; roles: Role[] };
@@ -384,8 +385,11 @@ export class SchedulesController {
         if (restSet.has(ds)) {
           newRows.push({ employeeId: eid, workDate, isRestDay: true, scheduledStart: null, scheduledEnd: null, otStart: null, otEnd: null, isNightShift: false });
         } else {
-          const start = new Date(`${ds}T${startTime}:00`);
-          let end = new Date(`${ds}T${endTime}:00`);
+          // WFM-entered times are Philippine wall-clock. Parse them with the
+          // explicit Manila offset — a zone-less string would be read in the
+          // SERVER's timezone (UTC in production), shifting every shift by 8h.
+          const start = manilaDateTime(ds, startTime!);
+          let end = manilaDateTime(ds, endTime!);
           if (isNaN(start.getTime()) || isNaN(end.getTime()))
             throw new BadRequestException('Invalid start or end time.');
           if (end <= start) end = new Date(end.getTime() + 86_400_000); // overnight
@@ -395,8 +399,8 @@ export class SchedulesController {
           let otStart: Date | null = null;
           let otEnd: Date | null = null;
           if (wantsOt) {
-            otStart = new Date(`${ds}T${body.otStartTime}:00`);
-            otEnd = new Date(`${ds}T${body.otEndTime}:00`);
+            otStart = manilaDateTime(ds, body.otStartTime!);
+            otEnd = manilaDateTime(ds, body.otEndTime!);
             if (isNaN(otStart.getTime()) || isNaN(otEnd.getTime()))
               throw new BadRequestException('Invalid overtime time.');
             if (otEnd <= otStart) otEnd = new Date(otEnd.getTime() + 86_400_000);
