@@ -174,18 +174,22 @@
           <div id="sc-restdays" class="chips"></div>
         </div>
 
-        <div id="sc-ot-section" style="margin-top:20px;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel-2)">
-          <label style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;cursor:pointer">
-            <input id="sc-ot-on" type="checkbox" style="width:auto"/>
-            Add overtime window <span class="muted" style="font-weight:400;font-size:12px">— individual only, applies to working days</span>
-          </label>
-          <div id="sc-ot-fields" class="row hide" style="gap:10px;margin-top:12px">
-            <label class="fld" style="margin:0;flex:1;min-width:120px"><span>OT start</span><input id="sc-ot-start" type="time"/></label>
-            <label class="fld" style="margin:0;flex:1;min-width:120px"><span>OT end</span><input id="sc-ot-end" type="time"/></label>
-          </div>
-        </div>
-
         <button class="btn primary" id="sc-apply" style="width:100%;margin-top:20px">Apply schedule</button>
+      </div>
+
+      <div class="panel">
+        <h2>Overtime</h2>
+        <div class="sub">Grant overtime for a specific date — managed separately from shifts. Pick the person, the exact date, a start time, and the number of hours.</div>
+        <label class="fld"><span>Employee</span><select id="ot-emp"></select></label>
+        <div class="row" style="gap:10px">
+          <label class="fld" style="margin:0;flex:1;min-width:130px"><span>Date</span><input id="ot-date" type="date"/></label>
+          <label class="fld" style="margin:0;flex:1;min-width:110px"><span>Start time</span><input id="ot-start" type="time"/></label>
+          <label class="fld" style="margin:0;flex:1;min-width:90px"><span>Hours</span><input id="ot-hours" type="number" min="0.5" max="24" step="0.5" value="2"/></label>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:2px">Classified automatically from the date &amp; time — <b>OT</b>, <b>NDOT</b> (night 22:00–06:00), <b>RDOT</b> (rest day), or <b>RDNDOT</b> (rest day + night). Mark the date as a rest day in the schedule for RD rates.</div>
+        <button class="btn primary" id="ot-grant" style="width:100%;margin-top:12px">Grant overtime</button>
+        <div style="margin-top:20px"><div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px">Upcoming overtime</div>
+          <div id="ot-list" class="feed"></div></div>
       </div>
 
       <div class="panel">

@@ -25,13 +25,12 @@ import {
   PayslipStatus,
   PayslipLineCategory,
 } from '@prisma/client';
+import { classifyOvertime, nightOverlapHours } from '../common/overtime';
 
 interface AuthedReq {
   user: { userId: string; employeeId: string; roles: Role[] };
 }
 
-const NIGHT_START = 22; // 10:00 PM
-const NIGHT_END = 6; //    6:00 AM
 const HOUR = 3_600_000;
 
 interface EarnRow {
@@ -41,11 +40,19 @@ interface EarnRow {
   teamId: string | null;
   rate: number;
   regularHours: number;
-  overtimeHours: number;
-  nightHours: number;
+  overtimeHours: number;   // OT + NDOT (non-rest overtime)
+  otHours: number;
+  ndotHours: number;
+  rdOvertimeHours: number; // RDOT + RDNDOT (rest-day overtime)
+  rdotHours: number;
+  rdndotHours: number;
+  nightHours: number;      // all worked night hours (regular + OT)
   regularPay: number;
-  overtimePay: number;
-  nightPay: number;
+  otPay: number;
+  ndotPay: number;
+  rdotPay: number;
+  rdndotPay: number;
+  nightPay: number;        // differential on REGULAR (non-OT) night hours only
   gross: number;
 }
 
@@ -127,6 +134,7 @@ export class PayrollController {
   ): Promise<EarnRow[]> {
     const policy = await this.prisma.shiftPolicy.findFirst({ where: { orgId }, orderBy: { createdAt: 'asc' } });
     const otMult = policy?.otMultiplier ?? 1.5;
+    const rdOtMult = policy?.rdOtMultiplier ?? 1.69;
     const nightPct = policy?.nightDiffPercent ?? 10;
 
     const employees = await this.prisma.employee.findMany({
@@ -152,13 +160,18 @@ export class PayrollController {
         otStart: { not: null, lt: periodEndExclusive },
         otEnd: { gt: periodStart },
       },
-      select: { employeeId: true, otStart: true, otEnd: true },
+      select: { employeeId: true, otStart: true, otEnd: true, isRestDay: true },
     });
+    // Two window lists per employee: OT on a rest day (paid at the RD-OT
+    // premium) vs OT on a working day (regular OT multiplier). A day is either
+    // a rest day or a working day, so the two lists never overlap.
     const otByEmp = new Map<string, { start: number; end: number }[]>();
+    const rdOtByEmp = new Map<string, { start: number; end: number }[]>();
     for (const w of otRows) {
       if (!w.otStart || !w.otEnd) continue;
-      if (!otByEmp.has(w.employeeId)) otByEmp.set(w.employeeId, []);
-      otByEmp.get(w.employeeId)!.push({ start: w.otStart.getTime(), end: w.otEnd.getTime() });
+      const bucket = w.isRestDay ? rdOtByEmp : otByEmp;
+      if (!bucket.has(w.employeeId)) bucket.set(w.employeeId, []);
+      bucket.get(w.employeeId)!.push({ start: w.otStart.getTime(), end: w.otEnd.getTime() });
     }
 
     const now = new Date();
@@ -178,29 +191,51 @@ export class PayrollController {
       byEmp.get(eid)!.push({ startedAt: segStart, endedAt: segEnd });
     }
 
+    // Intersect a segment with a list of OT windows → the overlapping
+    // sub-intervals, so each can be classified into day/night hours.
+    const intersect = (seg: { startedAt: Date; endedAt: Date }, wins: { start: number; end: number }[]) => {
+      const out: { start: number; end: number }[] = [];
+      for (const w of wins) {
+        const start = Math.max(seg.startedAt.getTime(), w.start);
+        const end = Math.min(seg.endedAt.getTime(), w.end);
+        if (end > start) out.push({ start, end });
+      }
+      return out;
+    };
+
     return employees.map((e) => {
       const segs = byEmp.get(e.id) ?? [];
       const wins = otByEmp.get(e.id) ?? [];
-      let regular = 0;
-      let overtime = 0;
-      let nightHours = 0;
+      const rdWins = rdOtByEmp.get(e.id) ?? [];
+      let regular = 0, ot = 0, ndot = 0, rdot = 0, rdndot = 0, nightAll = 0;
       for (const seg of segs) {
         const segMs = seg.endedAt.getTime() - seg.startedAt.getTime();
-        // Worked time inside an authorized OT window is overtime; the rest regular.
         let otMs = 0;
-        for (const w of wins) {
-          const ov = Math.min(seg.endedAt.getTime(), w.end) - Math.max(seg.startedAt.getTime(), w.start);
-          if (ov > 0) otMs += ov;
+        // Rest-day OT windows take precedence; the two sets are disjoint anyway.
+        for (const iv of intersect(seg, rdWins)) {
+          const c = classifyOvertime(new Date(iv.start), new Date(iv.end), true);
+          rdot += c.rdot; rdndot += c.rdndot; otMs += iv.end - iv.start;
+        }
+        for (const iv of intersect(seg, wins)) {
+          const c = classifyOvertime(new Date(iv.start), new Date(iv.end), false);
+          ot += c.ot; ndot += c.ndot; otMs += iv.end - iv.start;
         }
         otMs = Math.min(otMs, segMs); // guard against overlapping windows
-        overtime += otMs / HOUR;
         regular += (segMs - otMs) / HOUR;
-        nightHours += this.nightHours(seg.startedAt, seg.endedAt);
+        nightAll += nightOverlapHours(seg.startedAt, seg.endedAt);
       }
+      // Night differential is a +% add-on. For OT night hours it's folded into
+      // the NDOT/RDNDOT rates, so the standalone night line covers only the
+      // REGULAR (non-OT) night hours.
+      const regularNight = Math.max(0, nightAll - ndot - rdndot);
       const rate = e.hourlyRate ?? 0;
+      const nd = nightPct / 100;
       const regularPay = regular * rate;
-      const overtimePay = overtime * rate * otMult;
-      const nightPay = nightHours * rate * (nightPct / 100);
+      const otPay = ot * rate * otMult;
+      const ndotPay = ndot * rate * (otMult + nd);
+      const rdotPay = rdot * rate * rdOtMult;
+      const rdndotPay = rdndot * rate * (rdOtMult + nd);
+      const nightPay = regularNight * rate * nd;
       return {
         employeeId: e.id,
         employeeCode: e.employeeCode,
@@ -208,12 +243,20 @@ export class PayrollController {
         teamId: e.teamId,
         rate,
         regularHours: round(regular),
-        overtimeHours: round(overtime),
-        nightHours: round(nightHours),
+        overtimeHours: round(ot + ndot),
+        otHours: round(ot),
+        ndotHours: round(ndot),
+        rdOvertimeHours: round(rdot + rdndot),
+        rdotHours: round(rdot),
+        rdndotHours: round(rdndot),
+        nightHours: round(nightAll),
         regularPay: round(regularPay),
-        overtimePay: round(overtimePay),
+        otPay: round(otPay),
+        ndotPay: round(ndotPay),
+        rdotPay: round(rdotPay),
+        rdndotPay: round(rdndotPay),
         nightPay: round(nightPay),
-        gross: round(regularPay + overtimePay + nightPay),
+        gross: round(regularPay + otPay + ndotPay + rdotPay + rdndotPay + nightPay),
       };
     });
   }
@@ -231,6 +274,9 @@ export class PayrollController {
       rate: r.rate,
       regularHours: r.regularHours,
       overtimeHours: r.overtimeHours,
+      ndotHours: r.ndotHours,
+      rdOvertimeHours: r.rdOvertimeHours,
+      rdndotHours: r.rdndotHours,
       nightHours: r.nightHours,
       gross: r.gross,
     }));
@@ -424,7 +470,10 @@ export class PayrollController {
       const lines: { category: PayslipLineCategory; label: string; amount: number; origin: string; componentId?: string }[] = [
         { category: 'EARNING', label: 'Regular pay', amount: e.regularPay, origin: 'AUTO' },
       ];
-      if (e.overtimePay > 0) lines.push({ category: 'EARNING', label: 'Overtime pay', amount: e.overtimePay, origin: 'AUTO' });
+      if (e.otPay > 0) lines.push({ category: 'EARNING', label: `Overtime pay (OT, ${e.otHours}h)`, amount: e.otPay, origin: 'AUTO' });
+      if (e.ndotPay > 0) lines.push({ category: 'EARNING', label: `Night-diff OT pay (NDOT, ${e.ndotHours}h)`, amount: e.ndotPay, origin: 'AUTO' });
+      if (e.rdotPay > 0) lines.push({ category: 'EARNING', label: `Rest day OT pay (RDOT, ${e.rdotHours}h)`, amount: e.rdotPay, origin: 'AUTO' });
+      if (e.rdndotPay > 0) lines.push({ category: 'EARNING', label: `Rest day night-diff OT pay (RDNDOT, ${e.rdndotHours}h)`, amount: e.rdndotPay, origin: 'AUTO' });
       if (e.nightPay > 0) lines.push({ category: 'EARNING', label: 'Night differential', amount: e.nightPay, origin: 'AUTO' });
 
       // ALLOWANCE / DEDUCTION lines from applicable components.
@@ -641,21 +690,4 @@ export class PayrollController {
     });
   }
 
-  /** Hours of [a,b] that fall inside the nightly 22:00–06:00 window (local). */
-  private nightHours(a: Date, b: Date): number {
-    let total = 0;
-    const day = new Date(a);
-    day.setHours(0, 0, 0, 0);
-    day.setDate(day.getDate() - 1); // a night window can start the previous evening
-    let guard = 0;
-    while (day.getTime() < b.getTime() && guard++ < 400) {
-      const winStart = new Date(day); winStart.setHours(NIGHT_START, 0, 0, 0);
-      const winEnd = new Date(day); winEnd.setHours(NIGHT_END, 0, 0, 0);
-      winEnd.setDate(winEnd.getDate() + 1); // wraps past midnight
-      const ov = Math.min(b.getTime(), winEnd.getTime()) - Math.max(a.getTime(), winStart.getTime());
-      if (ov > 0) total += ov / HOUR;
-      day.setDate(day.getDate() + 1);
-    }
-    return total;
-  }
 }

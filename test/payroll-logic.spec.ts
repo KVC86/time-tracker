@@ -112,4 +112,49 @@ describe('computeEarnings — authorization-based overtime + session cap', () =>
     // Capped at 16:00 → 8h. Without the cap it would bill all the way to the period end.
     expect(row.regularHours).toBeCloseTo(8, 5);
   });
+
+  it('pays rest-day overtime at the RD-OT multiplier, distinct from regular OT', async () => {
+    await resetShift();
+    const clockIn = new Date(`${day}T10:00:00`);
+    const clockOut = new Date(`${day}T12:00:00`); // 2h worked, all inside RD OT
+    const te = await prisma.timeEntry.create({
+      data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: new Date(`${day}T12:00:00`), clockOutAt: clockOut, status: 'CLOSED' },
+    });
+    await prisma.activitySession.create({ data: { timeEntryId: te.id, activityType: 'Inbound Calls', startedAt: clockIn, endedAt: clockOut } });
+    // Rest day with a WFM-granted OT window 10:00–12:00 (daytime → no night diff).
+    await prisma.schedule.create({
+      data: { employeeId: empId, workDate: new Date(`${day}T00:00:00Z`), isRestDay: true,
+        otStart: new Date(`${day}T10:00:00`), otEnd: new Date(`${day}T12:00:00`) },
+    });
+
+    const [row] = await earn();
+    expect(row.rdOvertimeHours).toBeCloseTo(2, 5);
+    expect(row.overtimeHours).toBe(0);   // not counted as ordinary OT
+    expect(row.regularHours).toBe(0);    // rest-day work isn't regular pay
+    expect(row.nightHours).toBe(0);
+    // 2h × ₱100 × 1.69 (default rdOtMultiplier) = 338.
+    expect(row.gross).toBeCloseTo(338, 2);
+  });
+
+  it('classifies rest-day night OT as RDNDOT and stacks the night differential', async () => {
+    await resetShift();
+    const clockIn = new Date(`${day}T22:00:00`);
+    const clockOut = new Date('2026-06-02T00:00:00'); // 2h, all rest-day night
+    const te = await prisma.timeEntry.create({
+      data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: new Date('2026-06-02T00:00:00'), clockOutAt: clockOut, status: 'CLOSED' },
+    });
+    await prisma.activitySession.create({ data: { timeEntryId: te.id, activityType: 'Inbound Calls', startedAt: clockIn, endedAt: clockOut } });
+    await prisma.schedule.create({
+      data: { employeeId: empId, workDate: new Date(`${day}T00:00:00Z`), isRestDay: true,
+        otStart: new Date(`${day}T22:00:00`), otEnd: new Date('2026-06-02T00:00:00') },
+    });
+
+    const [row] = await earn();
+    expect(row.rdndotHours).toBeCloseTo(2, 5);
+    expect(row.rdOvertimeHours).toBeCloseTo(2, 5); // rdot + rdndot
+    expect(row.overtimeHours).toBe(0);
+    expect(row.nightHours).toBeCloseTo(2, 5);
+    // 2h × ₱100 × (1.69 rest-day + 0.10 night) = 358.
+    expect(row.gross).toBeCloseTo(358, 2);
+  });
 });

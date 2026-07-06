@@ -18,6 +18,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { Role, LeaveStatus } from '@prisma/client';
 import { manilaDateTime } from '../common/timezone';
+import { classifyOvertime, otClassLabel } from '../common/overtime';
 
 interface AuthedReq {
   user: { userId: string; employeeId: string; roles: Role[] };
@@ -33,8 +34,6 @@ interface ApplyBody {
   endTime?: string;           // HH:mm
   isNightShift?: boolean;
   restDays?: string[];        // YYYY-MM-DD dates within the range
-  otStartTime?: string;       // HH:mm — overtime window (individual only)
-  otEndTime?: string;
   force?: boolean;            // bypass compliance warnings after the WFM confirms
 }
 
@@ -69,24 +68,23 @@ export class SchedulesController {
     return emp.orgId;
   }
 
-  /** Turn pending schedule rows into upsert operations (one per employee/day). */
+  /** Turn pending schedule rows into upsert operations (one per employee/day).
+   *  Overtime is managed separately (see the OVERTIME GRANTS endpoints), so a
+   *  shift apply/edit NEVER touches the OT window on an existing row — it only
+   *  writes shift/rest-day fields. On create it seeds OT from the row (used by
+   *  copy-week, which deliberately duplicates OT into fresh days). */
   private upsertOps(rows: ScheduleRow[]) {
     return rows.map((r) => {
-      const data = {
+      const shiftData = {
         isRestDay: r.isRestDay,
         scheduledStart: r.scheduledStart,
         scheduledEnd: r.scheduledEnd,
-        otStart: r.otStart,
-        otEnd: r.otEnd,
         isNightShift: r.isNightShift,
-        // Re-applying clears any prior acknowledgment so a fresh OT grant
-        // re-surfaces the "you've been given overtime" banner.
-        otAcknowledgedAt: null,
       };
       return this.prisma.schedule.upsert({
         where: { employeeId_workDate: { employeeId: r.employeeId, workDate: r.workDate } },
-        create: { employeeId: r.employeeId, workDate: r.workDate, ...data },
-        update: data,
+        create: { employeeId: r.employeeId, workDate: r.workDate, ...shiftData, otStart: r.otStart, otEnd: r.otEnd },
+        update: shiftData, // leave OT (and its acknowledgment) untouched
       });
     });
   }
@@ -345,11 +343,6 @@ export class SchedulesController {
     if (hasWorkingDay && (!startTime || !endTime))
       throw new BadRequestException('startTime and endTime are required for working days.');
 
-    // Overtime is an individual-only setting. Ignore it for team applies.
-    const wantsOt = !!employeeId && !!body.otStartTime && !!body.otEndTime;
-    if (employeeId && (body.otStartTime || body.otEndTime) && !wantsOt)
-      throw new BadRequestException('Provide both an overtime start and end time, or neither.');
-
     const orgId = await this.orgIdFor(req.user.employeeId);
 
     // Resolve target employees (in-org).
@@ -382,8 +375,11 @@ export class SchedulesController {
     for (const eid of employeeIds) {
       for (const ds of days) {
         const workDate = new Date(ds); // UTC midnight, matches list queries
+        // Overtime is managed separately (OVERTIME GRANTS endpoints), so the
+        // shift builder never sets it — otStart/otEnd stay null here and any
+        // existing OT grant on this day is preserved by upsertOps().
         if (restSet.has(ds)) {
-          newRows.push({ employeeId: eid, workDate, isRestDay: true, scheduledStart: null, scheduledEnd: null, otStart: null, otEnd: null, isNightShift: false });
+          newRows.push({ employeeId: eid, workDate, isRestDay: true, scheduledStart: null, scheduledEnd: null, otStart: null, otEnd: null, isNightShift: !!body.isNightShift });
         } else {
           // WFM-entered times are Philippine wall-clock. Parse them with the
           // explicit Manila offset — a zone-less string would be read in the
@@ -392,31 +388,9 @@ export class SchedulesController {
           let end = manilaDateTime(ds, endTime!);
           if (isNaN(start.getTime()) || isNaN(end.getTime()))
             throw new BadRequestException('Invalid start or end time.');
-          const overnightShift = end <= start;
-          if (overnightShift) end = new Date(end.getTime() + 86_400_000); // crosses midnight
+          if (end <= start) end = new Date(end.getTime() + 86_400_000); // crosses midnight
 
-          // Optional overtime window (individual only). Null when not set, so
-          // re-applying without OT clears any previous OT on that day.
-          let otStart: Date | null = null;
-          let otEnd: Date | null = null;
-          if (wantsOt) {
-            otStart = manilaDateTime(ds, body.otStartTime!);
-            otEnd = manilaDateTime(ds, body.otEndTime!);
-            if (isNaN(otStart.getTime()) || isNaN(otEnd.getTime()))
-              throw new BadRequestException('Invalid overtime time.');
-            if (otEnd <= otStart) otEnd = new Date(otEnd.getTime() + 86_400_000);
-            // OT normally runs right after the shift. On an OVERNIGHT shift the
-            // WFM enters OT in next-day wall-clock (e.g. 06:00–08:00 after a
-            // 22:00–06:00 shift), which parses a day early because it's anchored
-            // to the shift's calendar date — roll it forward so it sits after
-            // the shift end. Pure day shifts keep any pre-shift OT intact.
-            if (overnightShift && otStart < start) {
-              otStart = new Date(otStart.getTime() + 86_400_000);
-              otEnd = new Date(otEnd.getTime() + 86_400_000);
-            }
-          }
-
-          newRows.push({ employeeId: eid, workDate, isRestDay: false, scheduledStart: start, scheduledEnd: end, otStart, otEnd, isNightShift: !!body.isNightShift });
+          newRows.push({ employeeId: eid, workDate, isRestDay: false, scheduledStart: start, scheduledEnd: end, otStart: null, otEnd: null, isNightShift: !!body.isNightShift });
         }
       }
     }
@@ -513,6 +487,116 @@ export class SchedulesController {
     if (!existing || existing.employee.orgId !== orgId)
       throw new NotFoundException('Schedule not found.');
     await this.prisma.schedule.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  // ───────────────────────── OVERTIME GRANTS ───────────────────────────
+  // Overtime is managed on its own: grant it for a specific date as a start
+  // time + a number of hours (a duration), independent of the shift builder.
+  // It rides on that day's schedule row (creating one if the day has none).
+
+  private otWorkDate(date: string) {
+    const d = new Date(`${date}T00:00:00.000Z`); // UTC midnight, matches schedule rows
+    if (isNaN(d.getTime())) throw new BadRequestException('Invalid date.');
+    return d;
+  }
+
+  private otHoursOf(otStart: Date | null, otEnd: Date | null) {
+    if (!otStart || !otEnd) return 0;
+    return Math.round((otEnd.getTime() - otStart.getTime()) / 360_000) / 10; // 1-decimal hours
+  }
+
+  /** Grant overtime for one employee on one date: start time + N hours. */
+  @Post('overtime')
+  async grantOvertime(
+    @Req() req: AuthedReq,
+    @Body() body: { employeeId: string; date: string; startTime: string; hours: number },
+  ) {
+    const { employeeId, date, startTime } = body;
+    const hours = Number(body.hours);
+    if (!employeeId || !date || !startTime)
+      throw new BadRequestException('employeeId, date, and startTime are required.');
+    if (!(hours > 0) || hours > 24)
+      throw new BadRequestException('hours must be between 0 and 24.');
+
+    const orgId = await this.orgIdFor(req.user.employeeId);
+    const emp = await this.prisma.employee.findFirst({ where: { id: employeeId, orgId }, select: { id: true } });
+    if (!emp) throw new NotFoundException('Employee not found.');
+
+    // WFM enters Philippine wall-clock; anchor with the Manila offset so the
+    // window is the same absolute instant regardless of server timezone.
+    const otStart = manilaDateTime(date, startTime);
+    if (isNaN(otStart.getTime())) throw new BadRequestException('Invalid start time.');
+    const otEnd = new Date(otStart.getTime() + Math.round(hours * 3_600_000));
+
+    const workDate = this.otWorkDate(date);
+    const existing = await this.prisma.schedule.findUnique({
+      where: { employeeId_workDate: { employeeId, workDate } },
+    });
+    // Rest-day status comes from the SCHEDULE, not from "no shift": OT is
+    // rest-day OT only when the date is actually the employee's scheduled rest
+    // day. A grant on a bare date is ordinary overtime. The final class (OT /
+    // NDOT / RDOT / RDNDOT) is then derived from that plus the time of day.
+    const isRestDay = existing ? existing.isRestDay : false;
+    const saved = await this.prisma.schedule.upsert({
+      where: { employeeId_workDate: { employeeId, workDate } },
+      create: { employeeId, workDate, isRestDay, scheduledStart: null, scheduledEnd: null, otStart, otEnd, otAcknowledgedAt: null },
+      update: { otStart, otEnd, otAcknowledgedAt: null }, // re-surface the banner
+    });
+    const classification = otClassLabel(classifyOvertime(otStart, otEnd, saved.isRestDay));
+    this.events.toEmployee(employeeId, { type: 'OVERTIME_GRANTED', workDate, otStart, otEnd });
+    return { ok: true, id: saved.id, otStart, otEnd, hours, isRestDay: saved.isRestDay, classification };
+  }
+
+  /** Upcoming overtime grants for one employee (for the management list). */
+  @Get('overtime')
+  async listOvertime(@Req() req: AuthedReq, @Query('employeeId') employeeId?: string) {
+    if (!employeeId) throw new BadRequestException('employeeId is required.');
+    const orgId = await this.orgIdFor(req.user.employeeId);
+    const emp = await this.prisma.employee.findFirst({ where: { id: employeeId, orgId }, select: { id: true } });
+    if (!emp) throw new NotFoundException('Employee not found.');
+    const since = new Date();
+    since.setDate(since.getDate() - 1); // include yesterday so a just-past grant still lists
+    const rows = await this.prisma.schedule.findMany({
+      where: {
+        employeeId,
+        otStart: { not: null },
+        workDate: { gte: new Date(Date.UTC(since.getUTCFullYear(), since.getUTCMonth(), since.getUTCDate())) },
+      },
+      orderBy: { workDate: 'asc' },
+      select: { id: true, workDate: true, otStart: true, otEnd: true, isRestDay: true, otAcknowledgedAt: true },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      workDate: r.workDate,
+      otStart: r.otStart,
+      otEnd: r.otEnd,
+      hours: this.otHoursOf(r.otStart, r.otEnd),
+      isRestDay: r.isRestDay,
+      classification: otClassLabel(classifyOvertime(r.otStart, r.otEnd, r.isRestDay)),
+      acknowledged: !!r.otAcknowledgedAt,
+    }));
+  }
+
+  /** Cancel an overtime grant. Removes the row if it existed only for the OT
+   *  (a rest day with no shift); otherwise just clears the OT window. */
+  @Delete('overtime/:id')
+  async clearOvertime(@Req() req: AuthedReq, @Param('id') id: string) {
+    const orgId = await this.orgIdFor(req.user.employeeId);
+    const row = await this.prisma.schedule.findUnique({
+      where: { id },
+      include: { employee: { select: { orgId: true } } },
+    });
+    if (!row || row.employee.orgId !== orgId) throw new NotFoundException('Overtime grant not found.');
+    if (!row.isRestDay && !row.scheduledStart && !row.scheduledEnd) {
+      // Row existed only to hold this OT (no shift, not a scheduled rest day).
+      await this.prisma.schedule.delete({ where: { id } });
+    } else {
+      await this.prisma.schedule.update({
+        where: { id },
+        data: { otStart: null, otEnd: null, otAcknowledgedAt: null },
+      });
+    }
     return { ok: true };
   }
 }

@@ -270,6 +270,7 @@ model ShiftPolicy {
 
   // Payroll rules
   otMultiplier           Float @default(1.5)  // overtime pay multiplier (hours/day over shiftHours)
+  rdOtMultiplier         Float @default(1.69) // rest-day overtime multiplier (PH: 130% × 130%); configurable per org
   nightDiffPercent       Int   @default(10)   // % premium on hours worked at night (22:00-06:00)
 
   createdAt          DateTime @default(now())
