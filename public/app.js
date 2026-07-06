@@ -176,9 +176,10 @@ function canLeaveReview(roles){return roles.includes("TEAM_LEAD")||roles.include
 function buildTabs(roles){
   const tabs=document.getElementById("tabs"); tabs.innerHTML="";
   const lead=isLead(roles);
-  const allTabs=["clock","leave","schedule","console","oversight","people","teams","payroll","payslips"];
+  const allTabs=["clock","myschedule","leave","schedule","console","oversight","people","teams","payroll","payslips"];
   const defs=[];
   if(user.employeeId) defs.push(["clock","My clock"]);
+  if(user.employeeId) defs.push(["myschedule","My schedule"]);
   if(user.employeeId && !lead && !isScheduler(roles) && !isManager(roles) && !isPayroll(roles)) defs.push(["leave","My leave"]);
   if(user.employeeId) defs.push(["payslips","My payslips"]);
   if(isScheduler(roles)) defs.push(["schedule","Scheduling"]);
@@ -195,6 +196,7 @@ function buildTabs(roles){
       stopOversightPoll();
       document.querySelectorAll(".tab").forEach(t=>t.classList.remove("on")); b.classList.add("on");
       allTabs.forEach(id=>document.getElementById("tab-"+id).classList.toggle("hide",k!==id));
+      if(k==="myschedule") loadMySchedule();
       if(k==="leave") loadMyLeave();
       if(k==="schedule") loadSchedulePanel();
       if(k==="oversight") startOversightPoll();
@@ -1232,8 +1234,46 @@ async function loadOvertime(){
   });
 }
 async function ackOvertime(id){
+  // Guard against an accidental tap: dismissing only hides the reminder, but
+  // make the user confirm and tell them where to find the OT afterwards.
+  const ok=await confirmDialog({title:"Dismiss overtime reminder?",
+    message:"This only hides the reminder. Your overtime is still scheduled and you'll still be paid for it — you can always see it under “My schedule”.",
+    confirmText:"Dismiss",cancelText:"Keep it",kind:"warn"});
+  if(!ok) return;
   try{ await api(`/me/overtime/${id}/ack`,{method:"POST"}); }catch(e){ toast(e.message,"err"); return; }
   loadOvertime();
+}
+
+// ── My schedule (read-only): upcoming shifts + granted overtime ──
+async function loadMySchedule(){
+  const box=document.getElementById("mysched-list");
+  if(!box) return;
+  box.innerHTML='<div class="muted" style="font-size:13px;padding:4px 0">Loading…</div>';
+  let rows;
+  try{ rows=await api("/me/schedule"); }
+  catch(e){ box.innerHTML='<div class="muted" style="font-size:13px">Could not load your schedule.</div>'; return; }
+  if(!rows.length){ box.innerHTML='<div class="muted" style="font-size:13px">No upcoming shifts scheduled.</div>'; return; }
+  box.innerHTML="";
+  rows.forEach(r=>{
+    const card=document.createElement("div");
+    card.style.cssText="border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;background:var(--panel)";
+    const shift=r.isRestDay
+      ? '<span class="muted">Rest day — no shift</span>'
+      : `<b>${fmtTime(r.scheduledStart)} – ${fmtTime(r.scheduledEnd)}</b>`+(r.isNightShift?' <span class="muted" style="font-size:12px">· night shift</span>':'');
+    let html=`<div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">`+
+      `<div><div style="font-size:13px;color:var(--muted)">${fmtDay(r.workDate)}</div>`+
+      `<div style="margin-top:2px">${shift}</div></div>`;
+    if(r.hasOvertime){
+      html+=`<div style="border:1px solid var(--amber);border-radius:10px;padding:8px 12px;background:#16130a">`+
+        `<div style="color:var(--amber);font-weight:600;font-size:13px">⏱ Overtime</div>`+
+        `<div style="font-size:13px;margin-top:2px">${fmtTime(r.otStart)} – ${fmtTime(r.otEnd)}</div>`+
+        `<div class="muted" style="font-size:11px;margin-top:2px">${r.otAcknowledged?"Acknowledged":"New — not yet acknowledged"}</div>`+
+      `</div>`;
+    }
+    html+=`</div>`;
+    card.innerHTML=html;
+    box.appendChild(card);
+  });
 }
 
 // ── My payslips (every member) ──
