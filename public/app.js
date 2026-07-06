@@ -599,19 +599,70 @@ async function loadSchedulePanel(){
   scTargets=await api("/schedules/targets").catch(()=>({employees:[],teams:[]}));
   populateScTargets();
   populateCopyTargets();
+  populateOtEmp();
   const fd=document.getElementById("sc-filter-date");
   if(!fd.value) fd.value=dateStr(new Date());
+  const od=document.getElementById("ot-date");
+  if(!od.value) od.value=dateStr(new Date());
   renderWeekdayPattern();
   renderRestDays();
   loadScheduleList();
 }
+
+// ── Overtime management (WFM): grant per date + hours, separate from shifts ──
+function populateOtEmp(){
+  const sel=document.getElementById("ot-emp"); sel.innerHTML="";
+  const items=scTargets.employees||[];
+  if(!items.length){ const o=document.createElement("option"); o.value=""; o.textContent="(none available)"; sel.appendChild(o); document.getElementById("ot-list").innerHTML=""; return; }
+  items.forEach(e=>{ const o=document.createElement("option"); o.value=e.id; o.textContent=`${e.employeeCode} — ${e.fullName}`; sel.appendChild(o); });
+  loadOtGrants();
+}
+async function loadOtGrants(){
+  const box=document.getElementById("ot-list");
+  const eid=document.getElementById("ot-emp").value;
+  if(!eid){ box.innerHTML=""; return; }
+  box.innerHTML='<div class="muted" style="font-size:13px;padding:4px 0">Loading…</div>';
+  let rows;
+  try{ rows=await api("/schedules/overtime?employeeId="+encodeURIComponent(eid)); }
+  catch(e){ box.innerHTML='<div class="muted" style="font-size:13px">Could not load overtime.</div>'; return; }
+  if(!rows.length){ box.innerHTML='<div class="muted" style="font-size:13px">No upcoming overtime.</div>'; return; }
+  box.innerHTML="";
+  rows.forEach(r=>{
+    const row=document.createElement("div");
+    row.style.cssText="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)";
+    row.innerHTML=`<div><div style="font-weight:600;font-size:13px">${fmtDay(r.workDate)} · ${r.hours}h${r.classification?` <span style="color:var(--amber)">· ${r.classification}</span>`:''}</div>`+
+      `<div class="muted" style="font-size:12px">${fmtTime(r.otStart)} – ${fmtTime(r.otEnd)}${r.acknowledged?' · acknowledged':''}</div></div>`;
+    const del=document.createElement("button"); del.className="btn"; del.textContent="Remove";
+    del.style.cssText="padding:5px 12px;font-size:12px;white-space:nowrap";
+    del.onclick=async()=>{ del.disabled=true; try{ await api("/schedules/overtime/"+r.id,{method:"DELETE"}); toast("Overtime removed","ok"); loadOtGrants(); }catch(e){ toast(e.message,"err"); del.disabled=false; } };
+    row.appendChild(del); box.appendChild(row);
+  });
+}
+document.getElementById("ot-emp").onchange=loadOtGrants;
+document.getElementById("ot-grant").onclick=async()=>{
+  const btn=document.getElementById("ot-grant");
+  const employeeId=document.getElementById("ot-emp").value;
+  const date=document.getElementById("ot-date").value;
+  const startTime=document.getElementById("ot-start").value;
+  const hours=parseFloat(document.getElementById("ot-hours").value);
+  if(!employeeId){ toast("Pick an employee.","err"); return; }
+  if(!date){ toast("Pick a date.","err"); return; }
+  if(!startTime){ toast("Set a start time.","err"); return; }
+  if(!(hours>0)){ toast("Enter the number of hours.","err"); return; }
+  btn.disabled=true; btn.textContent="Granting…";
+  try{
+    const r=await api("/schedules/overtime",{method:"POST",body:{employeeId,date,startTime,hours}});
+    toast(`Overtime granted · ${hours}h${r.classification?` · ${r.classification}`:""}`,"ok");
+    loadOtGrants();
+  }catch(e){ toast(e.message,"err"); }
+  finally{ btn.disabled=false; btn.textContent="Grant overtime"; }
+};
 let scScope="employee", scMultiSel=new Set();
 function setScScope(s){
   scScope=s;
   document.getElementById("sc-scope-emp").classList.toggle("on",s==="employee");
   document.getElementById("sc-scope-multi").classList.toggle("on",s==="multi");
   document.getElementById("sc-scope-team").classList.toggle("on",s==="team");
-  document.getElementById("sc-ot-section").classList.toggle("hide",s!=="employee"); // overtime is individual-only
   document.getElementById("sc-target").classList.toggle("hide",s==="multi");
   document.getElementById("sc-multi-wrap").classList.toggle("hide",s!=="multi");
   if(s==="multi") populateScMulti(); else populateScTargets();
@@ -639,7 +690,6 @@ function populateScMulti(){
 document.getElementById("sc-scope-emp").onclick=()=>setScScope("employee");
 document.getElementById("sc-scope-multi").onclick=()=>setScScope("multi");
 document.getElementById("sc-scope-team").onclick=()=>setScScope("team");
-document.getElementById("sc-ot-on").onchange=e=>document.getElementById("sc-ot-fields").classList.toggle("hide",!e.target.checked);
 
 function rangeDates(){
   const s=document.getElementById("sc-start-date").value, e=document.getElementById("sc-end-date").value;
@@ -732,11 +782,6 @@ document.getElementById("sc-apply").onclick=async()=>{
   if(scScope==="team") body.teamId=targetId;
   else if(scScope==="multi") body.employeeIds=[...scMultiSel];
   else body.employeeId=targetId;
-  if(scScope==="employee" && document.getElementById("sc-ot-on").checked){
-    const otS=document.getElementById("sc-ot-start").value, otE=document.getElementById("sc-ot-end").value;
-    if(!otS||!otE){toast("Set both overtime times, or switch overtime off.","err");return;}
-    body.otStartTime=otS; body.otEndTime=otE;
-  }
   btn.disabled=true; btn.textContent="Applying…";
   try{
     const r=await postWithCompliance("/schedules/apply",body);
@@ -1226,7 +1271,7 @@ async function loadOvertime(){
     const card=document.createElement("div");
     card.style.cssText="border:1px solid var(--amber);background:#16130a;border-radius:12px;padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap";
     card.innerHTML=`<div><b style="color:var(--amber)">⏱ WFM has provided you with overtime</b>`+
-      `<div class="muted" style="font-size:13px;margin-top:2px">${fmtDay(g.workDate)} · ${fmtTime(g.otStart)}–${fmtTime(g.otEnd)}</div></div>`;
+      `<div class="muted" style="font-size:13px;margin-top:2px">${fmtDay(g.workDate)} · ${fmtTime(g.otStart)}–${fmtTime(g.otEnd)}${g.classification?` · ${g.classification}`:''}</div></div>`;
     const btn=document.createElement("button"); btn.className="btn warn"; btn.textContent="Got it";
     btn.style.cssText="padding:6px 14px;font-size:13px;white-space:nowrap";
     btn.onclick=()=>ackOvertime(g.id);
@@ -1259,13 +1304,15 @@ async function loadMySchedule(){
     card.style.cssText="border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;background:var(--panel)";
     const shift=r.isRestDay
       ? '<span class="muted">Rest day — no shift</span>'
-      : `<b>${fmtTime(r.scheduledStart)} – ${fmtTime(r.scheduledEnd)}</b>`+(r.isNightShift?' <span class="muted" style="font-size:12px">· night shift</span>':'');
+      : r.scheduledStart
+        ? `<b>${fmtTime(r.scheduledStart)} – ${fmtTime(r.scheduledEnd)}</b>`+(r.isNightShift?' <span class="muted" style="font-size:12px">· night shift</span>':'')
+        : '<span class="muted">Overtime only — no regular shift</span>';
     let html=`<div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">`+
       `<div><div style="font-size:13px;color:var(--muted)">${fmtDay(r.workDate)}</div>`+
       `<div style="margin-top:2px">${shift}</div></div>`;
     if(r.hasOvertime){
       html+=`<div style="border:1px solid var(--amber);border-radius:10px;padding:8px 12px;background:#16130a">`+
-        `<div style="color:var(--amber);font-weight:600;font-size:13px">⏱ Overtime</div>`+
+        `<div style="color:var(--amber);font-weight:600;font-size:13px">⏱ ${r.otClass||'Overtime'}</div>`+
         `<div style="font-size:13px;margin-top:2px">${fmtTime(r.otStart)} – ${fmtTime(r.otEnd)}</div>`+
         `<div class="muted" style="font-size:11px;margin-top:2px">${r.otAcknowledged?"Acknowledged":"New — not yet acknowledged"}</div>`+
       `</div>`;

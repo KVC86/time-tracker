@@ -12,6 +12,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PayslipStatus } from '@prisma/client';
+import { classifyOvertime, otClassLabel } from '../common/overtime';
 
 interface AuthedReq {
   user: { userId: string; employeeId: string; roles: string[] };
@@ -105,9 +106,12 @@ export class ProfileController {
         workDate: { gte: this.utcMidnight(since) },
       },
       orderBy: { workDate: 'asc' },
-      select: { id: true, workDate: true, otStart: true, otEnd: true, isNightShift: true },
+      select: { id: true, workDate: true, otStart: true, otEnd: true, isNightShift: true, isRestDay: true },
     });
-    return rows;
+    return rows.map((r) => ({
+      ...r,
+      classification: otClassLabel(classifyOvertime(r.otStart, r.otEnd, r.isRestDay)),
+    }));
   }
 
   @Post('overtime/:scheduleId/ack')
@@ -162,6 +166,7 @@ export class ProfileController {
       otEnd: r.otEnd,
       isNightShift: r.isNightShift,
       hasOvertime: !!(r.otStart && r.otEnd),
+      otClass: otClassLabel(classifyOvertime(r.otStart, r.otEnd, r.isRestDay)),
       otAcknowledged: !!r.otAcknowledgedAt,
     }));
   }
