@@ -392,7 +392,8 @@ export class SchedulesController {
           let end = manilaDateTime(ds, endTime!);
           if (isNaN(start.getTime()) || isNaN(end.getTime()))
             throw new BadRequestException('Invalid start or end time.');
-          if (end <= start) end = new Date(end.getTime() + 86_400_000); // overnight
+          const overnightShift = end <= start;
+          if (overnightShift) end = new Date(end.getTime() + 86_400_000); // crosses midnight
 
           // Optional overtime window (individual only). Null when not set, so
           // re-applying without OT clears any previous OT on that day.
@@ -404,6 +405,15 @@ export class SchedulesController {
             if (isNaN(otStart.getTime()) || isNaN(otEnd.getTime()))
               throw new BadRequestException('Invalid overtime time.');
             if (otEnd <= otStart) otEnd = new Date(otEnd.getTime() + 86_400_000);
+            // OT normally runs right after the shift. On an OVERNIGHT shift the
+            // WFM enters OT in next-day wall-clock (e.g. 06:00–08:00 after a
+            // 22:00–06:00 shift), which parses a day early because it's anchored
+            // to the shift's calendar date — roll it forward so it sits after
+            // the shift end. Pure day shifts keep any pre-shift OT intact.
+            if (overnightShift && otStart < start) {
+              otStart = new Date(otStart.getTime() + 86_400_000);
+              otEnd = new Date(otEnd.getTime() + 86_400_000);
+            }
           }
 
           newRows.push({ employeeId: eid, workDate, isRestDay: false, scheduledStart: start, scheduledEnd: end, otStart, otEnd, isNightShift: !!body.isNightShift });
