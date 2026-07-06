@@ -158,9 +158,30 @@ export class TimeTrackingService {
     const sched = await this.prisma.schedule.findFirst({
       where: { employeeId, workDate: scheduleDate },
     });
+
+    // The allowed clock-in window is the assigned shift, WIDENED to include any
+    // granted overtime window — so an OT'd employee can log in past their normal
+    // end (or before their normal start, if OT sits ahead of the shift). OT is a
+    // single contiguous window per day, so the min/max envelope is the union.
+    // The grant itself (otStart/otEnd being set) is the authorisation; the
+    // banner acknowledgement is a UX dismissal, not a precondition for working.
+    const hasOt = !!(sched?.otStart && sched?.otEnd);
+    const windowStart = !sched
+      ? null
+      : hasOt && sched.scheduledStart
+        ? new Date(Math.min(sched.scheduledStart.getTime(), sched.otStart!.getTime()))
+        : sched.scheduledStart ?? sched.otStart;
+    const windowEnd = !sched
+      ? null
+      : hasOt && sched.scheduledEnd
+        ? new Date(Math.max(sched.scheduledEnd.getTime(), sched.otEnd!.getTime()))
+        : sched.scheduledEnd ?? sched.otEnd;
+
     if (sched) {
-      // A scheduled rest day means no shift at all today.
-      if (sched.isRestDay) {
+      // A scheduled rest day means no shift at all today — unless WFM granted
+      // overtime for the rest day (an explicit OT call on a day off), which
+      // opens the OT window enforced below.
+      if (sched.isRestDay && !hasOt) {
         await this.recordViolation(
           employeeId,
           ViolationType.OUT_OF_SCHEDULE_LOGIN,
@@ -170,38 +191,39 @@ export class TimeTrackingService {
           'Today is a scheduled rest day — you cannot clock in.',
         );
       }
-      // Before the scheduled start time → block (the explicit requirement).
-      if (sched.scheduledStart && new Date() < sched.scheduledStart) {
-        const startLabel = manilaTimeLabel(sched.scheduledStart);
+      // Before the window opens → block (the explicit requirement).
+      if (windowStart && new Date() < windowStart) {
+        const startLabel = manilaTimeLabel(windowStart);
         await this.recordViolation(
           employeeId,
           ViolationType.OUT_OF_SCHEDULE_LOGIN,
-          `Attempted login before scheduled start ${sched.scheduledStart.toISOString()}`,
+          `Attempted login before window start ${windowStart.toISOString()}`,
         );
         throw new ForbiddenException(
-          `Too early to clock in. Your shift starts at ${startLabel}.`,
+          `Too early to clock in. Your ${hasOt ? 'shift window (incl. overtime) opens' : 'shift starts'} at ${startLabel}.`,
         );
       }
-      // After the scheduled end time → the shift is over for today.
-      if (sched.scheduledEnd && new Date() > sched.scheduledEnd) {
-        const endLabel = manilaTimeLabel(sched.scheduledEnd);
+      // After the window closes → the shift (plus any granted OT) is over.
+      if (windowEnd && new Date() > windowEnd) {
+        const endLabel = manilaTimeLabel(windowEnd);
         await this.recordViolation(
           employeeId,
           ViolationType.OUT_OF_SCHEDULE_LOGIN,
-          `Attempted login after scheduled end ${sched.scheduledEnd.toISOString()}`,
+          `Attempted login after window end ${windowEnd.toISOString()}`,
         );
         throw new ForbiddenException(
-          `Your scheduled shift has already ended for today (ended at ${endLabel}).`,
+          `Your ${hasOt ? 'shift (including overtime)' : 'scheduled shift'} has already ended for today (ended at ${endLabel}).`,
         );
       }
     }
 
     const now = new Date();
-    // Follow the assigned schedule's end time when one exists; otherwise fall
-    // back to the org's default shift-length policy from the moment of clock-in.
+    // Auto-expiry follows the assigned window END — the scheduled end, widened
+    // by any granted OT — when a schedule exists; otherwise fall back to the
+    // org's default shift-length policy from the moment of clock-in.
     const shiftEndsAt =
-      sched && sched.scheduledEnd
-        ? sched.scheduledEnd
+      sched && windowEnd
+        ? windowEnd
         : new Date(now.getTime() + policy.shiftHours * 3600_000);
 
     let entry;
