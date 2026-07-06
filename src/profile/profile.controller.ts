@@ -122,6 +122,50 @@ export class ProfileController {
     return { ok: true };
   }
 
+  // ───────────────────────── MY SCHEDULE ───────────────────────────────
+  // Read-only view of the signed-in employee's own upcoming shifts, so they
+  // can always look up their hours and overtime window — even after they've
+  // dismissed the overtime banner. Self-scoped; no role check.
+
+  @Get('schedule')
+  async mySchedule(@Req() req: AuthedReq) {
+    if (!req.user.employeeId) return [];
+    const since = new Date();
+    since.setDate(since.getDate() - 1); // include yesterday so today's shift still shows
+    const rows = await this.prisma.schedule.findMany({
+      where: {
+        employeeId: req.user.employeeId,
+        workDate: { gte: this.utcMidnight(since) },
+      },
+      orderBy: { workDate: 'asc' },
+      take: 60, // a reasonable look-ahead horizon
+      select: {
+        id: true,
+        workDate: true,
+        isRestDay: true,
+        scheduledStart: true,
+        scheduledEnd: true,
+        otStart: true,
+        otEnd: true,
+        isNightShift: true,
+        otAcknowledgedAt: true,
+      },
+    });
+    // Surface acknowledgement as a boolean; keep the raw timestamp internal.
+    return rows.map((r) => ({
+      id: r.id,
+      workDate: r.workDate,
+      isRestDay: r.isRestDay,
+      scheduledStart: r.scheduledStart,
+      scheduledEnd: r.scheduledEnd,
+      otStart: r.otStart,
+      otEnd: r.otEnd,
+      isNightShift: r.isNightShift,
+      hasOvertime: !!(r.otStart && r.otEnd),
+      otAcknowledged: !!r.otAcknowledgedAt,
+    }));
+  }
+
   private utcMidnight(d: Date) {
     return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   }
