@@ -1,8 +1,9 @@
 import { classifyOvertime, otClassLabel } from '../src/common/overtime';
 
-// Pure unit tests (no DB). Dates are built with the local-time constructor so
-// the night window (22:00–06:00 local) lines up regardless of the runner's tz.
-const at = (h: number, m = 0, day = 15) => new Date(2026, 7, day, h, m, 0); // Aug 2026
+// Pure unit tests (no DB). Dates are anchored to Manila time (the frame the
+// night window uses) so results are identical on a UTC or Manila runner.
+const BASE = Date.parse('2026-08-15T00:00:00+08:00');
+const at = (h: number, m = 0) => new Date(BASE + h * 3_600_000 + m * 60_000);
 
 describe('classifyOvertime — OT / NDOT / RDOT / RDNDOT', () => {
   it('working day, daytime → OT', () => {
