@@ -38,8 +38,8 @@ describe('computeEarnings — authorization-based overtime + session cap', () =>
   let orgId: string;
   let empId: string;
   const day = '2026-06-01';
-  const periodStart = new Date(`${day}T00:00:00`);
-  const periodEndExcl = new Date('2026-06-02T00:00:00');
+  const periodStart = new Date(`${day}T00:00:00+08:00`);
+  const periodEndExcl = new Date('2026-06-02T00:00:00+08:00');
 
   beforeAll(async () => {
     const org = await prisma.organization.create({ data: { name: 'TEST-OT-' + Date.now(), timezone: 'Asia/Manila' } });
@@ -68,15 +68,15 @@ describe('computeEarnings — authorization-based overtime + session cap', () =>
 
   it('pays OT only for worked time inside an authorized OT window', async () => {
     await resetShift();
-    const clockIn = new Date(`${day}T18:00:00`);
-    const clockOut = new Date(`${day}T22:00:00`); // 4h worked
+    const clockIn = new Date(`${day}T18:00:00+08:00`);
+    const clockOut = new Date(`${day}T22:00:00+08:00`); // 4h worked
     const te = await prisma.timeEntry.create({
-      data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: new Date(`${day}T23:00:00`), clockOutAt: clockOut, status: 'CLOSED' },
+      data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: new Date(`${day}T23:00:00+08:00`), clockOutAt: clockOut, status: 'CLOSED' },
     });
     await prisma.activitySession.create({ data: { timeEntryId: te.id, activityType: 'Inbound Calls', startedAt: clockIn, endedAt: clockOut } });
     // WFM-authorized OT window 20:00–22:00 (2h)
     await prisma.schedule.create({
-      data: { employeeId: empId, workDate: new Date(`${day}T00:00:00Z`), otStart: new Date(`${day}T20:00:00`), otEnd: new Date(`${day}T22:00:00`) },
+      data: { employeeId: empId, workDate: new Date(`${day}T00:00:00Z`), otStart: new Date(`${day}T20:00:00+08:00`), otEnd: new Date(`${day}T22:00:00+08:00`) },
     });
 
     const [row] = await earn();
@@ -86,10 +86,10 @@ describe('computeEarnings — authorization-based overtime + session cap', () =>
 
   it('pays NO overtime without an authorized window, even past 8h worked', async () => {
     await resetShift();
-    const clockIn = new Date(`${day}T14:00:00`);
-    const clockOut = new Date(`${day}T23:00:00`); // 9h worked, no OT window
+    const clockIn = new Date(`${day}T14:00:00+08:00`);
+    const clockOut = new Date(`${day}T23:00:00+08:00`); // 9h worked, no OT window
     const te = await prisma.timeEntry.create({
-      data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: new Date('2026-06-02T00:00:00'), clockOutAt: clockOut, status: 'CLOSED' },
+      data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: new Date('2026-06-02T00:00:00+08:00'), clockOutAt: clockOut, status: 'CLOSED' },
     });
     await prisma.activitySession.create({ data: { timeEntryId: te.id, activityType: 'Inbound Calls', startedAt: clockIn, endedAt: clockOut } });
 
@@ -101,8 +101,8 @@ describe('computeEarnings — authorization-based overtime + session cap', () =>
 
   it('caps a still-open session at the shift end, not "now" (#5)', async () => {
     await resetShift();
-    const clockIn = new Date(`${day}T08:00:00`);
-    const shiftEnds = new Date(`${day}T16:00:00`); // 8h window, already in the past
+    const clockIn = new Date(`${day}T08:00:00+08:00`);
+    const shiftEnds = new Date(`${day}T16:00:00+08:00`); // 8h window, already in the past
     const te = await prisma.timeEntry.create({
       data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: shiftEnds, status: 'OPEN' },
     });
@@ -115,16 +115,16 @@ describe('computeEarnings — authorization-based overtime + session cap', () =>
 
   it('pays rest-day overtime at the RD-OT multiplier, distinct from regular OT', async () => {
     await resetShift();
-    const clockIn = new Date(`${day}T10:00:00`);
-    const clockOut = new Date(`${day}T12:00:00`); // 2h worked, all inside RD OT
+    const clockIn = new Date(`${day}T10:00:00+08:00`);
+    const clockOut = new Date(`${day}T12:00:00+08:00`); // 2h worked, all inside RD OT
     const te = await prisma.timeEntry.create({
-      data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: new Date(`${day}T12:00:00`), clockOutAt: clockOut, status: 'CLOSED' },
+      data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: new Date(`${day}T12:00:00+08:00`), clockOutAt: clockOut, status: 'CLOSED' },
     });
     await prisma.activitySession.create({ data: { timeEntryId: te.id, activityType: 'Inbound Calls', startedAt: clockIn, endedAt: clockOut } });
     // Rest day with a WFM-granted OT window 10:00–12:00 (daytime → no night diff).
     await prisma.schedule.create({
       data: { employeeId: empId, workDate: new Date(`${day}T00:00:00Z`), isRestDay: true,
-        otStart: new Date(`${day}T10:00:00`), otEnd: new Date(`${day}T12:00:00`) },
+        otStart: new Date(`${day}T10:00:00+08:00`), otEnd: new Date(`${day}T12:00:00+08:00`) },
     });
 
     const [row] = await earn();
@@ -138,15 +138,15 @@ describe('computeEarnings — authorization-based overtime + session cap', () =>
 
   it('classifies rest-day night OT as RDNDOT and stacks the night differential', async () => {
     await resetShift();
-    const clockIn = new Date(`${day}T22:00:00`);
-    const clockOut = new Date('2026-06-02T00:00:00'); // 2h, all rest-day night
+    const clockIn = new Date(`${day}T22:00:00+08:00`);
+    const clockOut = new Date('2026-06-02T00:00:00+08:00'); // 2h, all rest-day night
     const te = await prisma.timeEntry.create({
-      data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: new Date('2026-06-02T00:00:00'), clockOutAt: clockOut, status: 'CLOSED' },
+      data: { employeeId: empId, clockInAt: clockIn, shiftEndsAt: new Date('2026-06-02T00:00:00+08:00'), clockOutAt: clockOut, status: 'CLOSED' },
     });
     await prisma.activitySession.create({ data: { timeEntryId: te.id, activityType: 'Inbound Calls', startedAt: clockIn, endedAt: clockOut } });
     await prisma.schedule.create({
       data: { employeeId: empId, workDate: new Date(`${day}T00:00:00Z`), isRestDay: true,
-        otStart: new Date(`${day}T22:00:00`), otEnd: new Date('2026-06-02T00:00:00') },
+        otStart: new Date(`${day}T22:00:00+08:00`), otEnd: new Date('2026-06-02T00:00:00+08:00') },
     });
 
     const [row] = await earn();

@@ -6,28 +6,31 @@
 //   • night hours 22:00–06:00 → night differential
 // yielding OT, NDOT (night), RDOT (rest day), and RDNDOT (rest day + night).
 //
-// The night window is computed in the server's local time — identical to the
-// payroll night-differential calc — so classification labels and pay always
-// agree. (Both share the latent assumption that the server runs Manila time.)
+// The night window (22:00–06:00) is evaluated in PHILIPPINE time regardless of
+// the server's timezone — OT times are Manila wall-clock, so night must be too,
+// or the same OT window would classify differently on a UTC vs Manila server.
 
 const HOUR = 3_600_000;
+const DAY = 86_400_000;
+const MANILA_OFFSET = 8 * HOUR; // PH is UTC+8, no DST
 const NIGHT_START = 22; // 10:00 PM
 const NIGHT_END = 6; //    6:00 AM
 
-/** Hours of [a, b) that fall inside the nightly 22:00–06:00 window (local). */
+/** Hours of [a, b) that fall inside the nightly 22:00–06:00 window (Manila). */
 export function nightOverlapHours(a: Date, b: Date): number {
+  // Shift instants into a Manila-local frame, then apply fixed daily windows.
+  const aM = a.getTime() + MANILA_OFFSET;
+  const bM = b.getTime() + MANILA_OFFSET;
+  if (bM <= aM) return 0;
   let total = 0;
-  const day = new Date(a);
-  day.setHours(0, 0, 0, 0);
-  day.setDate(day.getDate() - 1); // a night window can start the previous evening
+  let day = Math.floor(aM / DAY) * DAY - DAY; // include the prior evening's window
   let guard = 0;
-  while (day.getTime() < b.getTime() && guard++ < 400) {
-    const winStart = new Date(day); winStart.setHours(NIGHT_START, 0, 0, 0);
-    const winEnd = new Date(day); winEnd.setHours(NIGHT_END, 0, 0, 0);
-    winEnd.setDate(winEnd.getDate() + 1); // wraps past midnight
-    const ov = Math.min(b.getTime(), winEnd.getTime()) - Math.max(a.getTime(), winStart.getTime());
+  while (day < bM && guard++ < 400) {
+    const winStart = day + NIGHT_START * HOUR;
+    const winEnd = day + DAY + NIGHT_END * HOUR; // wraps to next-day 06:00
+    const ov = Math.min(bM, winEnd) - Math.max(aM, winStart);
     if (ov > 0) total += ov / HOUR;
-    day.setDate(day.getDate() + 1);
+    day += DAY;
   }
   return total;
 }
