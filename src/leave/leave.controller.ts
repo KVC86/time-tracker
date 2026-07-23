@@ -10,6 +10,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { SubmitLeaveDto, LeaveDecisionDto } from './leave.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -47,7 +48,7 @@ export class LeaveController {
 
   /** Employee submits a leave request. */
   @Post()
-  async submit(@Req() req: AuthedReq, @Body() body: { leaveType: LeaveType; startDate: string; endDate: string; reason?: string; attachments?: string[] }) {
+  async submit(@Req() req: AuthedReq, @Body() body: SubmitLeaveDto) {
     if (!body.leaveType || !body.startDate || !body.endDate)
       throw new BadRequestException('leaveType, startDate, and endDate are required.');
 
@@ -174,7 +175,7 @@ export class LeaveController {
   @UseGuards(RolesGuard)
   @Roles('TEAM_LEAD', 'HR', 'ADMIN')
   @Post(':id/approve')
-  async approve(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: { note?: string }) {
+  async approve(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: LeaveDecisionDto) {
     return this.reviewLeave(req.user, id, LeaveStatus.APPROVED, body.note);
   }
 
@@ -182,7 +183,7 @@ export class LeaveController {
   @UseGuards(RolesGuard)
   @Roles('TEAM_LEAD', 'HR', 'ADMIN')
   @Post(':id/reject')
-  async reject(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: { note?: string }) {
+  async reject(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: LeaveDecisionDto) {
     return this.reviewLeave(req.user, id, LeaveStatus.REJECTED, body.note);
   }
 

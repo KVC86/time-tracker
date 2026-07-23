@@ -11,6 +11,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
+import { ApplyScheduleDto, CopyScheduleDto, ManualShiftDto } from './schedules.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeEventsPublisher } from '../time-tracking/time-tracking.gateway';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -314,7 +315,7 @@ export class SchedulesController {
   /** Apply a shift block across a date range to a team or an individual,
    *  with optional rest days. Upserts one row per employee per day. */
   @Post('apply')
-  async apply(@Req() req: AuthedReq, @Body() body: ApplyBody) {
+  async apply(@Req() req: AuthedReq, @Body() body: ApplyScheduleDto) {
     const { employeeId, teamId, startDate, endDate, startTime, endTime } = body;
     const pickedIds = (body.employeeIds ?? []).filter(Boolean);
     const sources = [employeeId ? 1 : 0, teamId ? 1 : 0, pickedIds.length ? 1 : 0].reduce((a, b) => a + b, 0);
@@ -419,7 +420,7 @@ export class SchedulesController {
   @Post('copy-week')
   async copyWeek(
     @Req() req: AuthedReq,
-    @Body() body: { sourceStart: string; destStart: string; employeeId?: string; force?: boolean },
+    @Body() body: CopyScheduleDto,
   ) {
     const { sourceStart, destStart, employeeId } = body;
     if (!sourceStart || !destStart)
@@ -510,7 +511,7 @@ export class SchedulesController {
   @Post('overtime')
   async grantOvertime(
     @Req() req: AuthedReq,
-    @Body() body: { employeeId: string; date: string; startTime: string; hours: number },
+    @Body() body: ManualShiftDto,
   ) {
     const { employeeId, date, startTime } = body;
     const hours = Number(body.hours);

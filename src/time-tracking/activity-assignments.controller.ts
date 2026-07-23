@@ -13,6 +13,7 @@ import {
   ForbiddenException,
   ConflictException,
 } from '@nestjs/common';
+import { AssignActivityDto } from './activity-assignments.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeEventsPublisher } from './time-tracking.gateway';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -134,7 +135,7 @@ export class ActivityAssignmentsController {
   /** Assign an activity type to an employee, a team, or ALL members (org-wide,
    *  which also covers anyone added later). Org-wide = no employeeId/teamId. */
   @Post()
-  async assign(@Req() req: AuthedReq, @Body() body: { activityTypeId: string; employeeId?: string; teamId?: string }) {
+  async assign(@Req() req: AuthedReq, @Body() body: AssignActivityDto) {
     const { activityTypeId, employeeId, teamId } = body;
     if (!activityTypeId) throw new BadRequestException('activityTypeId is required.');
     if (employeeId && teamId)

@@ -16,6 +16,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ClockInDto, SwitchActivityDto, StartBreakDto, GrantOvertimeDto } from './time-tracking.dto';
 import { TimeTrackingService } from './time-tracking.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeEventsPublisher } from './time-tracking.gateway';
@@ -41,7 +42,7 @@ export class TimeTrackingController {
   constructor(private readonly svc: TimeTrackingService) {}
 
   @Post('clock-in')
-  clockIn(@Req() req: AuthedReq, @Body() body: { activityType: string; source?: string }) {
+  clockIn(@Req() req: AuthedReq, @Body() body: ClockInDto) {
     return this.svc.clockIn(req.user.employeeId, body.activityType ?? 'Productivity', {
       userId: req.user.userId,
       source: body.source,
@@ -50,12 +51,12 @@ export class TimeTrackingController {
   }
 
   @Post('activity')
-  switchActivity(@Req() req: AuthedReq, @Body() body: { activityType: string }) {
+  switchActivity(@Req() req: AuthedReq, @Body() body: SwitchActivityDto) {
     return this.svc.switchActivity(req.user.employeeId, body.activityType);
   }
 
   @Post('break/start')
-  startBreak(@Req() req: AuthedReq, @Body() body: { breakType: BreakType }) {
+  startBreak(@Req() req: AuthedReq, @Body() body: StartBreakDto) {
     return this.svc.startBreak(req.user.employeeId, body.breakType, req.user.roles);
   }
 
@@ -143,7 +144,7 @@ export class ApprovalsController {
    *  Pushes a real-time event so the employee's button appears instantly. */
   @Roles('WFM', 'ADMIN')
   @Post()
-  async grant(@Req() req: AuthedReq, @Body() body: { employeeId: string }) {
+  async grant(@Req() req: AuthedReq, @Body() body: GrantOvertimeDto) {
     // Reject if a live, unused grant already exists (ports prototype guard).
     const existing = await this.prisma.breakApproval.findFirst({
       where: { employeeId: body.employeeId, status: ApprovalStatus.GRANTED },
