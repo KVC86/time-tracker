@@ -14,6 +14,15 @@ const prisma = new PrismaClient();
 const PASSWORD = 'Password123!';
 
 async function main() {
+  // The seeded account uses a weak, printed demo password. Never seed a
+  // production database with it; override only if you truly mean to.
+  if (process.env.NODE_ENV === 'production' && !process.env.ALLOW_PROD_SEED) {
+    throw new Error(
+      'Refusing to seed demo credentials in production. ' +
+        'Set ALLOW_PROD_SEED=1 to override (not recommended).',
+    );
+  }
+
   const org = await prisma.organization.create({
     data: { name: 'Acme BPO', timezone: 'Asia/Manila' },
   });

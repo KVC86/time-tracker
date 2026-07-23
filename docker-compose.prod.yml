@@ -15,12 +15,14 @@ services:
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: "postgresql://wfm:${POSTGRES_PASSWORD:-wfm}@postgres:5432/wfm?schema=public"
-      DIRECT_DATABASE_URL: "postgresql://wfm:${POSTGRES_PASSWORD:-wfm}@postgres:5432/wfm?schema=public"
+      DATABASE_URL: "postgresql://wfm:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (e.g. openssl rand -hex 16)}@postgres:5432/wfm?schema=public"
+      DIRECT_DATABASE_URL: "postgresql://wfm:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (e.g. openssl rand -hex 16)}@postgres:5432/wfm?schema=public"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       PORT: "3000"
-      WEB_ORIGIN: "${WEB_ORIGIN:-*}"
+      # Set to your site URL (e.g. https://app.example.com) to allow the browser
+      # frontend. Left empty, the app locks CORS in production (no wildcard).
+      WEB_ORIGIN: "${WEB_ORIGIN:-}"
       # Required — refuses to start without it. Put it in .env (never commit it).
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env (e.g. openssl rand -hex 32)}"
     ports:
@@ -31,7 +33,7 @@ services:
     image: postgres:17
     environment:
       POSTGRES_USER: wfm
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-wfm}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (e.g. openssl rand -hex 16)}"
       POSTGRES_DB: wfm
     volumes:
       - wfm_pgdata:/var/lib/postgresql/data

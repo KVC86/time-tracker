@@ -21,15 +21,19 @@ ENV NODE_ENV=production
 
 # Copy only what the app needs at runtime. node_modules comes from the builder
 # (includes the Prisma CLI used by the entrypoint for migrate deploy).
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/public ./public
-COPY package.json ./
-COPY docker-entrypoint.sh ./
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/dist ./dist
+COPY --from=builder --chown=node:node /app/prisma ./prisma
+COPY --from=builder --chown=node:node /app/public ./public
+COPY --chown=node:node package.json ./
+COPY --chown=node:node docker-entrypoint.sh ./
 
 # Normalise line endings (in case of CRLF from Windows) and make executable.
 RUN sed -i 's/\r$//' docker-entrypoint.sh && chmod +x docker-entrypoint.sh
+
+# Drop root: run as the image's built-in unprivileged `node` user. Port 3000 is
+# unprivileged, and migrations run over the network, so no root is needed.
+USER node
 
 EXPOSE 3000
 ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]
