@@ -9,6 +9,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
+import { ProfilePhotoDto } from './profile.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PayslipStatus } from '@prisma/client';
@@ -27,7 +28,7 @@ export class ProfileController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Post('photo')
-  async setPhoto(@Req() req: AuthedReq, @Body() body: { photo: string }) {
+  async setPhoto(@Req() req: AuthedReq, @Body() body: ProfilePhotoDto) {
     if (!req.user.employeeId)
       throw new BadRequestException('No employee record to attach a photo to.');
     const photo = body.photo ?? '';

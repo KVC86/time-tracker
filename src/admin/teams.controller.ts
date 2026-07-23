@@ -10,6 +10,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
+import { CreateTeamDto, UpdateTeamDto, TeamMemberDto, TeamPhotoDto } from './teams.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -67,7 +68,7 @@ export class TeamsController {
   }
 
   @Post()
-  async create(@Req() req: AuthedReq, @Body() body: { name: string }) {
+  async create(@Req() req: AuthedReq, @Body() body: CreateTeamDto) {
     const orgId = await this.orgId(req);
     const name = (body.name ?? '').trim();
     if (!name) throw new BadRequestException('Team name is required.');
@@ -81,7 +82,7 @@ export class TeamsController {
   async update(
     @Req() req: AuthedReq,
     @Param('id') id: string,
-    @Body() body: { name?: string; leadId?: string | null; managerId?: string | null },
+    @Body() body: UpdateTeamDto,
   ) {
     const orgId = await this.orgId(req);
     const team = await this.prisma.team.findUnique({ where: { id }, include: { department: true } });
@@ -114,7 +115,7 @@ export class TeamsController {
   }
 
   @Post(':id/members')
-  async addMember(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: { employeeId: string }) {
+  async addMember(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: TeamMemberDto) {
     const orgId = await this.orgId(req);
     const team = await this.prisma.team.findUnique({ where: { id }, include: { department: true } });
     if (!team || team.department.orgId !== orgId) throw new NotFoundException('Team not found.');
@@ -127,7 +128,7 @@ export class TeamsController {
   /** Remove a member from a team (clears their team). Also clears the
    *  lead/manager slot if the removed person held it. */
   @Post(':id/remove-member')
-  async removeMember(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: { employeeId: string }) {
+  async removeMember(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: TeamMemberDto) {
     const orgId = await this.orgId(req);
     const team = await this.prisma.team.findUnique({ where: { id }, include: { department: true } });
     if (!team || team.department.orgId !== orgId) throw new NotFoundException('Team not found.');
@@ -144,7 +145,7 @@ export class TeamsController {
 
   /** Upload/replace a team's group photo (base64 data URL). */
   @Post(':id/photo')
-  async setPhoto(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: { photo: string }) {
+  async setPhoto(@Req() req: AuthedReq, @Param('id') id: string, @Body() body: TeamPhotoDto) {
     const orgId = await this.orgId(req);
     const team = await this.prisma.team.findUnique({ where: { id }, include: { department: true } });
     if (!team || team.department.orgId !== orgId) throw new NotFoundException('Team not found.');

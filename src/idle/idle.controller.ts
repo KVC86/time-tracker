@@ -33,6 +33,7 @@ import {
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { IdleEventDto } from './idle.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeEntryStatus, ViolationType } from '@prisma/client';
 import { TimeEventsPublisher } from '../time-tracking/time-tracking.gateway';
@@ -62,7 +63,7 @@ export class IdleController {
   @Post()
   async ingest(
     @Headers('x-agent-key') agentKey: string | undefined,
-    @Body() body: IdleEventBody,
+    @Body() body: IdleEventDto,
   ) {
     // Fleet-key auth. The endpoint is disabled until the key is configured,
     // so a fresh deployment can never be driven by an unauthenticated agent.

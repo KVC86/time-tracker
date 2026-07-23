@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import 'reflect-metadata';
 import helmet from 'helmet';
+import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
@@ -23,6 +24,12 @@ async function bootstrap() {
     process.env.WEB_ORIGIN?.trim() ||
     (process.env.NODE_ENV === 'production' ? false : '*');
   app.enableCors({ origin: webOrigin });
+  // Validate and sanitise every request body against its DTO. `whitelist`
+  // strips properties with no decorator (blocks mass-assignment); `transform`
+  // instantiates the DTO class and coerces primitive types.
+  app.useGlobalPipes(
+    new ValidationPipe({ whitelist: true, transform: true }),
+  );
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);
   // eslint-disable-next-line no-console

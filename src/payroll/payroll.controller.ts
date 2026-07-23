@@ -13,6 +13,7 @@ import {
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
+import { SetRateDto, GeneratePayrollDto, AddPayslipLineDto, UpdatePayslipLineDto } from './payroll.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -92,7 +93,7 @@ export class PayrollController {
 
   /** Set an employee's hourly rate. */
   @Post('rates')
-  async setRate(@Req() req: AuthedReq, @Body() body: { employeeId: string; hourlyRate: number }) {
+  async setRate(@Req() req: AuthedReq, @Body() body: SetRateDto) {
     const orgId = await this.orgId(req);
     const rate = Number(body.hourlyRate);
     if (!body.employeeId) throw new BadRequestException('employeeId is required.');
@@ -440,7 +441,7 @@ export class PayrollController {
   /** Generate (or regenerate) DRAFT payslips for a period. RELEASED payslips
    *  are never overwritten. Applies every active, in-scope pay component. */
   @Post('payslips/generate')
-  async generate(@Req() req: AuthedReq, @Body() body: { start: string; end: string; employeeId?: string }) {
+  async generate(@Req() req: AuthedReq, @Body() body: GeneratePayrollDto) {
     const { earnStart, earnEndExclusive, labelStart, labelEnd } = this.parsePeriod(body.start, body.end);
     const orgId = await this.orgId(req);
 
@@ -565,7 +566,7 @@ export class PayrollController {
   async addLine(
     @Req() req: AuthedReq,
     @Param('id') id: string,
-    @Body() body: { category: PayslipLineCategory; label: string; amount: number },
+    @Body() body: AddPayslipLineDto,
   ) {
     const orgId = await this.orgId(req);
     const p = await this.loadOwnedPayslip(orgId, id);
@@ -586,7 +587,7 @@ export class PayrollController {
     @Req() req: AuthedReq,
     @Param('id') id: string,
     @Param('lineId') lineId: string,
-    @Body() body: { label?: string; amount?: number },
+    @Body() body: UpdatePayslipLineDto,
   ) {
     const orgId = await this.orgId(req);
     const p = await this.loadOwnedPayslip(orgId, id);

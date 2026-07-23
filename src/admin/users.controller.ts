@@ -9,6 +9,7 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
+import { CreateUserDto } from './users.dto';
 import { hash } from '@node-rs/argon2';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -63,7 +64,7 @@ export class UsersController {
   @Post()
   async create(
     @Req() req: AuthedReq,
-    @Body() body: { role: Role; fullName: string; email: string; password: string },
+    @Body() body: CreateUserDto,
   ) {
     if (!CREATABLE.includes(body.role))
       throw new BadRequestException(`Role must be one of: ${CREATABLE.join(', ')}.`);

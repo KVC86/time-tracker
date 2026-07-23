@@ -11,6 +11,7 @@ import {
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
+import { CreateActivityTypeDto } from './activity-types.dto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -76,7 +77,7 @@ export class ActivityTypesController {
   /** Team Lead (or above) adds a new activity type to their org. */
   @Roles('WFM', 'ADMIN')
   @Post()
-  async create(@Req() req: AuthedReq, @Body() body: { name: string }) {
+  async create(@Req() req: AuthedReq, @Body() body: CreateActivityTypeDto) {
     const orgId = await this.orgIdFor(req.user.employeeId);
     const name = (body.name ?? '').trim();
     if (!name) throw new BadRequestException('Activity name is required.');

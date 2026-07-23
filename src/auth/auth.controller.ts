@@ -6,6 +6,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { LoginDto, VerifyMfaDto, RefreshTokenDto } from './auth.dto';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
@@ -15,23 +16,23 @@ export class AuthController {
 
   /** Step 1 — password. Returns an MFA challenge, never a session yet. */
   @Post('login')
-  login(@Body() body: { identifier: string; password: string }) {
+  login(@Body() body: LoginDto) {
     return this.auth.login(body.identifier, body.password);
   }
 
   /** Step 2 — the second factor (TOTP code or emailed OTP). Returns tokens. */
   @Post('mfa/verify')
-  verify(@Body() body: { mfaToken: string; code: string }) {
+  verify(@Body() body: VerifyMfaDto) {
     return this.auth.verifyMfa(body.mfaToken, body.code);
   }
 
   @Post('refresh')
-  refresh(@Body() body: { refreshToken: string }) {
+  refresh(@Body() body: RefreshTokenDto) {
     return this.auth.refresh(body.refreshToken);
   }
 
   @Post('logout')
-  logout(@Body() body: { refreshToken: string }) {
+  logout(@Body() body: RefreshTokenDto) {
     return this.auth.logout(body.refreshToken);
   }
 
