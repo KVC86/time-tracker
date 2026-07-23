@@ -20,9 +20,14 @@ yarn-error.log*
 coverage/
 .nyc_output/
 
-# OS / editor cruft
+# OS / editor / tooling cruft
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+.claude/
 *.swp
+
+# Binaries / presentations don't belong in a code repo
+*.pptx
+*.pdf
