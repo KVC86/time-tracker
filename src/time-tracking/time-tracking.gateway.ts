@@ -31,7 +31,14 @@ import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 
-@WebSocketGateway({ cors: { origin: process.env.WEB_ORIGIN ?? '*' } })
+@WebSocketGateway({
+  cors: {
+    // Match the HTTP CORS policy: named origin only, no wildcard in production.
+    origin:
+      process.env.WEB_ORIGIN?.trim() ||
+      (process.env.NODE_ENV === 'production' ? false : '*'),
+  },
+})
 export class TimeTrackingGateway implements OnGatewayConnection {
   @WebSocketServer() server: Server;
   private readonly log = new Logger(TimeTrackingGateway.name);
